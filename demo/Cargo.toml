@@ -1,0 +1,24 @@
+[package]
+name = "pcs-vetting-prototype"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"
+publish = false
+description = "Throwaway prototype: hidden-vetter admission for OpenVTC with the Predicate Credential System"
+license = "Apache-2.0"
+
+[dependencies]
+predicate-credential-system = { path = "..", features = ["serde"] }
+ark-bls12-381 = { version = "0.6.0", default-features = false, features = ["curve", "std"] }
+ark-ec = { version = "0.6.0", default-features = false, features = ["std"] }
+ark-ff = { version = "0.6.0", default-features = false, features = ["std"] }
+ark-serialize = { version = "0.6.0", default-features = false, features = ["std"] }
+# MUST stay 0.8: ark_std::rand is rand 0.8.
+rand = { version = "0.8", features = ["std", "std_rng"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+thiserror = "2"
+# The real counting rule, so the claim "join policy unchanged" is exercised, not asserted.
+vta-sdk = { version = "=0.56.1", default-features = false, features = ["vetting"] }
