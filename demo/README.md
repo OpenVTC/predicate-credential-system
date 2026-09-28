@@ -21,6 +21,10 @@ cargo test -p pcs-vetting-prototype --release
 It is a workspace member of this repository (`publish = false`) and depends on the
 `predicate-credential-system` crate one directory up.
 
+**Not run in CI.** It pulls in `vta-sdk`'s whole dependency tree (trust-tasks-rs,
+dtg-credentials, reqwest/rustls, ...), so it is an optional harness for developers working on the
+OpenVTC integration, run locally as above, rather than a gate on every PR.
+
 ## Layout
 
 | Module | Role in the design |

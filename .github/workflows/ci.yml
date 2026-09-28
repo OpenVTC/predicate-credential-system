@@ -39,7 +39,10 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Scoped to the library: `demo/` pulls in vta-sdk's whole dependency tree
+      # (trust-tasks-rs, dtg-credentials, reqwest/rustls, ...), which would make every
+      # PR pay for compiling it. See the `test` job below.
+      - run: cargo clippy -p predicate-credential-system --all-targets --all-features -- -D warnings
 
   test:
     name: Test
@@ -52,9 +55,12 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # `demo/` (pcs-vetting-prototype) is a workspace member so it is exercised here too,
-      # even though only the root crate is published — see release-plz.toml.
-      - run: cargo test --workspace --all-features --all-targets
+      # Scoped to the library, not `--workspace`: `demo/` depends on vta-sdk, which drags
+      # in trust-tasks-rs, dtg-credentials, affinidi-data-integrity, reqwest/rustls and the
+      # rest of that stack, turning every PR's CI into a full Affinidi-ecosystem build for a
+      # crate nothing here publishes or ships. Run `cargo test -p pcs-vetting-prototype`
+      # locally (see demo/README.md) before changing `demo/`.
+      - run: cargo test -p predicate-credential-system --all-features --all-targets
 
   # `default = []`, so this is the only job that ever builds the library with
   # no features at all; the dev-dependency on itself (test-utils + serde)
