@@ -1,0 +1,27 @@
+# release-plz — versioning, changelogs and publishing for this crate.
+#
+# The model: merge PRs to main freely. `release-plz-pr` (.github/workflows/publish.yml)
+# keeps a single "Release PR" up to date with the version bump and changelog
+# entries those merges imply. Merging THAT PR is the release —
+# `release-plz-release` then tags the crate and publishes it to crates.io. See
+# RELEASING.md.
+
+[workspace]
+# Compare the public API against the last published version and force a
+# compatibility-breaking bump when it actually broke, rather than trusting an
+# author to notice.
+semver_check = true
+
+# One GitHub Release, carrying the changelog section for that version. This is
+# what an external consumer lands on from crates.io.
+git_release_enable = true
+
+# Label the Release PR so it is obvious in the queue and easy to filter.
+pr_labels = ["release"]
+
+# `demo` is `publish = false` (a throwaway prototype, no public API to hold stable) and nothing
+# depends on it, so it never ships and never needs a semver baseline. release-plz still bumps its
+# version to keep the workspace's Cargo.lock coherent; it just never uploads it.
+[[package]]
+name = "pcs-vetting-prototype"
+semver_check = false

@@ -1,0 +1,86 @@
+name: Release-plz
+
+# THE FILENAME OF THIS FILE IS LOAD-BEARING. Do not rename it.
+#
+# crates.io Trusted Publishing is configured per crate against a specific
+# repository + workflow FILENAME. Renaming this file requires updating the
+# crate's Trusted Publisher config on crates.io first, or the OIDC exchange
+# fails before any release logic runs.
+#
+# Versioning, changelogs and publishing: merge PRs to main freely.
+# `release-plz-pr` keeps a single Release PR up to date with the bump and
+# changelog entries those merges imply. Merging THAT PR is the release —
+# `release-plz-release` then tags and publishes. See RELEASING.md.
+#
+# ONE-TIME SETUP, on crates.io under the crate's Settings -> Trusted
+# Publishing: add owner `OpenVTC`, repository `predicate-credential-system`,
+# workflow `publish.yml`, environment `crates-io`. Until that exists, the
+# release job fails at the auth step naming exactly this.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: crates-io
+    permissions:
+      contents: write
+      pull-requests: read
+      id-token: write # OIDC token for crates.io Trusted Publishing, this job only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # release-plz diffs against the last release's tag
+          persist-credentials: false
+
+      - run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Authenticate to crates.io (Trusted Publishing)
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+
+      - uses: release-plz/action@b8d6b54b02889ff2ae2bb82e8b57c3a8fc1683a5 # v0.5.139
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      # The Release PR is a pure function of main's HEAD, so a burst of pushes
+      # can only leave the newest regeneration in flight; an older one is safe
+      # to cancel because its output is already stale.
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - uses: release-plz/action@b8d6b54b02889ff2ae2bb82e8b57c3a8fc1683a5 # v0.5.139
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
