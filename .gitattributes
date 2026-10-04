@@ -1,0 +1,4 @@
+# Jali's parameter sets are embedded byte for byte and pinned by SHA-256 (src/lattice/sets.rs):
+# no end-of-line conversion on checkout (core.autocrlf would change the bytes, and Setup of the
+# lattice instantiation would then refuse the files).
+src/lattice/sets/*.json -text

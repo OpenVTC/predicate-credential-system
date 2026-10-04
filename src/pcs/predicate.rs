@@ -137,7 +137,7 @@ pub struct AllowList<F> {
     allowed: Vec<F>,
 }
 
-impl<F: PrimeField> AllowList<F> {
+impl<F> AllowList<F> {
     /// The policy that admits exactly the given values of `EncPred`.
     #[must_use]
     pub fn new(allowed: impl IntoIterator<Item = F>) -> Self {
@@ -146,6 +146,14 @@ impl<F: PrimeField> AllowList<F> {
         }
     }
 
+    /// The admissible values of `EncPred`.
+    #[must_use]
+    pub fn allowed(&self) -> &[F] {
+        &self.allowed
+    }
+}
+
+impl<F: PrimeField> AllowList<F> {
     /// The policy that admits attesters whose credentials were issued under one of
     /// `predicates`, in the deployment `deployment` (the label that is given to `Setup`).
     ///
@@ -160,12 +168,6 @@ impl<F: PrimeField> AllowList<F> {
             .map(|f| enc_pred(deployment, f))
             .collect::<Result<Vec<F>, Error>>()
             .map(Self::new)
-    }
-
-    /// The admissible values of `EncPred`.
-    #[must_use]
-    pub fn allowed(&self) -> &[F] {
-        &self.allowed
     }
 }
 

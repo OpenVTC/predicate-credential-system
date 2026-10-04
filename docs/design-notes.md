@@ -130,3 +130,118 @@ code adds, or fixes where the paper leaves a choice:
   every algorithm; received public parameters must EQUAL what `Setup` derives from their label
   (`PCS::from_public_parameters_with_base` compares `pp_Σ` with base parameters the caller
   derived itself, for the IETF parameters of `Σ-BBS`).
+
+## The lattice instantiation (feature `lattice`)
+
+The post-quantum instantiation of construction.tex (sec:pq-construction): the credential base
+`Σ-vSIS` (`cred::VSIS`, an NTRU trapdoor from the crate `ntru-trapdoor`), the short-key
+`Tag_LWR` (`kiprf::LWR`), and Jali proofs in place of the Fiat-Shamir-compiled sigma protocols,
+as `pcs::lattice::LatticePCS`, which implements `PredicateCredentialSystem`.
+
+* **Architecture.** A set of modules behind one cargo feature, without a refactor of the pairing
+  code: `lattice` (constants, ring types, the SHAKE128 oracles, the embedded Jali parameter
+  sets), `cred::vsis`, `kiprf::lwr` and `pcs::lattice`. The protocol logic of the box exists
+  twice, in `pcs::construction` (generic over pairing-based bases and tags) and in
+  `pcs::lattice` (for one base and one tag); the trait `PredicateCredentialSystem` is the common
+  interface, and both follow the same rules (module `pcs`, "Rules the construction has to
+  keep"). The traits `SigmaFriendlyCredentialBase` and `PCSTag` are tied to sigma protocols over
+  groups and do not fit Jali's statements.
+* **One parameter set.** Ring degree 1024, `q = 2^20 − 3`, NTRU width 2, `ℓ_r = 2`, all short
+  messages ternary, `⌊β_s²⌋ = 90,803,788,942`, and the tag set `(γ, p, q_t, m) = (15, 2^16,
+  983,040, 168)` at proof degree 128 (`lattice`). The three Jali parameter sets (`R_att`,
+  `R_issue`, `R_issue` for root requests) were derived for exactly these values and for exactly
+  the statement layouts of `pcs::lattice::relations`, a line-by-line port of the validated
+  harness (block names and order, exact norms, `s` in the BDLOP part, the rounding errors as
+  subring blocks of the proof degree). They are embedded, pinned by SHA-256, loaded with Jali's
+  strict decoder and `check()`, and their digests enter the digest of `pp`.
+* **One real helper key.** `HKeyGen` is `TrapGen`; `Issue` and `issue_root` sample preimages
+  with `SampPre` at the target of `BlindIssue`, with fresh coins per call, under the issuance
+  cap `Q_max = 2^48` (counted in the signing key, carried in its encoding;
+  `HelperSecretKey::to_bytes_reserving` stores the count ahead of issuance). The validation
+  harness solved a key per credential instead; nothing of that remains.
+* **Exact preimages.** `ntru-trapdoor`'s `SampPre` rounds a floating-point lattice point, exact
+  with a measured margin of about `2^26`, not by proof. The paper asks for `s ∈ Λ_t` "in integer
+  arithmetic" (bb:864), so the signing key checks `s_0 + h s_1 = t mod q` exactly (one NTT
+  product with the prepared `h`, about 20 µs, next to 161 µs for `SampPre`) and the norm before
+  a preimage leaves it, and refuses a sample that fails (never observed).
+* **Bounded proofs.** Inside an attestation, an issuance proof or a root request, a Jali proof
+  has at most twice the estimated size of its parameter set (171,216 bytes for `R_att`, 85,824
+  for `R_issue`); the decoders and the verifiers refuse a longer one before any work. Honest
+  proofs have 0.95 to 1 times the estimate, so no honest verdict changes; garbage of up to Jali's
+  16 MiB would otherwise be decoded, hashed into `ctx_0` and handed to a statement compile
+  (0.2-0.3 s each).
+* **Fresh randomness everywhere.** Jali and `ntru-trapdoor` take 32-byte seeds; each proof,
+  `SampPre` call and `TrapGen` gets a fresh seed from the caller's RNG (`lattice::fresh_seed`),
+  never reused. A Jali `RestartLimit` is retried with a new seed (3 attempts).
+* **Types that cannot hold what the relations do not check.** Jali binds public constants
+  modulo the modulus of their constraint: a non-canonical tag `T + pz` has the witnesses of `T`,
+  and a non-binary `φ` admits a credential-free possession witness (`s = 0`). `LWRTag` stores
+  entries below `p = 2^16` and `BinaryPoly` stores bits, so neither can be represented. The
+  verifiers evaluate `ValidTag` on every tag all the same; `φ ∈ M_pub` holds by type and leaves
+  nothing to evaluate (the verifier computes the constant `b_φ φ` from the bits itself). Unit
+  tests show both effects on the relations themselves.
+* **Order of the checks.** `VerifyProof` runs the cheap public checks first (threshold, count,
+  key, `ValidTag`, canonical `C`, distinct tags, self-exclusion, policy), then the Jali
+  verification of `π_0`, then the `k` attestation proofs (each about 3 s and 0.5-0.6 GiB): one
+  after the other, or in parallel with the feature `parallel`. The verdict is the box's; only the
+  reason reported for a proof that fails several checks can differ.
+* **Parallel attestation verification** (feature `parallel`). The `k` attestation proofs of
+  `CheckAtts_P` are independent, so `VerifyProof` (and `Issue`) and `Prove` verify them on the
+  rayon pool of the calling thread, in batches of the pool's width `n`; each batch uses rayon's
+  short-circuiting `all`, and no batch starts after a failure. The result is the sequential one
+  for every input (`Ok`, or `InvalidAttestation` whichever attestations fail); only the time
+  changes. This rests on `VerifyProofAtt` never panicking, as documented: were it to panic on
+  some input, the two builds could differ only between that panic and `InvalidAttestation`
+  (either build could be the one that panics), never in accepting. A verification that has
+  started runs to its end even when another one fails, so a call whose first attestation fails
+  can still cost up to `min(k, n)` verifications, where the sequential loop costs one. A call
+  holds up to `min(k, n)` verifications at once. The batches are what bounds it:
+  with one parallel iterator over all `k`, rayon lets a thread that waits inside one verification
+  (Jali's own parallelism nests inside each one, on the same pool) start another; a model of the
+  nesting held `n + 1` items at once on `n = 3` and `n = 4` threads, and never more than `n`
+  with the batches. The verifying threads share only the policy-free parts of `LatticePCS` (a
+  private borrowed view), so a custom policy need not be `Sync`; it runs once, on the calling
+  thread, before any proof.
+* **Contexts.** SHA-256 transcripts of the paper's tuples `ctx_j`, `ctx_0`, `ctx_root` under
+  three oracle suffixes, led by a digest of `pp` that also covers what Jali's verification
+  depends on and the paper's `pp` does not name: Jali's `pp_seed` (derived from the label, never
+  chosen by the helper), the parameter-set digests, the Jali revision and the placement of `s`.
+* **Caches.** The parameter sets, the rings, `pp_Σ` as Jali polynomials and the rows of `c_0`
+  are built once per `LatticePCS`; `s_i = H_0(⟨id_i⟩)` and its rows once per call. Statement
+  building, `H_0` and the rows of a tag matrix cost 8-17 ms per proof, against seconds in Jali; compiled statements
+  cannot be cached (every proof has its own constants, and Jali has no shape-level
+  compilation).
+* **Unblind verifies once**, inside `Σ-vSIS.Unblind`, as the box of the base prescribes.
+
+### Limitations of the lattice instantiation
+
+* **No security theorem covers the code yet.** The paper states the post-quantum theorems
+  through `thm:pq-security`, which it references but does not state, for an online-extractable
+  argument system; Jali's proofs are Fiat-Shamir with extraction by rewinding, and the exactness
+  of the extracted norms is a property of Jali's design (`extraction_bound`), not a proven
+  theorem. By the paper's Remark "Concurrent issuance", plain Fiat-Shamir supports its theorems
+  only for sequential issuance and constant `k`. A helper that serializes its `Issue` calls does
+  not thereby meet that assumption: issuance is one message each way, and what a rewinding
+  extractor needs constrained is when an adversary makes the random-oracle queries of its proofs
+  relative to its other requests, which no helper controls. `Issue` therefore stays concurrent
+  (performance first). Multi-proof zero knowledge is accounted linearly (2^-128 up to about 2^39
+  proofs at proof degree 128).
+* **Rotation across helper keys** is the helper's (the trait takes one `hvk`); restoring an old
+  key encoding rolls the issuance counter back, and two live copies of one stored key count
+  separately (one live instance per stored key; `docs/operating-a-helper.md`).
+* **Variable time** in Jali, `SampPre` (floating point, rejection) and `TrapGen`.
+* **Memory**: about 0.5-0.6 GiB per `R_att` proof or verification, and with the feature
+  `parallel` up to `min(k, n)` attestation verifications at once per `VerifyProof`, `Issue` or
+  `Prove` on a pool of `n` threads (2.0-2.5 GiB at `k = 5` on five threads or more); bound it with
+  `RAYON_NUM_THREADS` or a rayon pool of your own ([Operating a helper](./operating-a-helper.md)).
+* **Out of scope**: the private credential requests (PRC) of the paper's appendix, which need
+  `Req` and a session context `χ` that the trait does not have; JSON forms for the lattice
+  objects.
+* **Platforms**: only aarch64 (Apple M4) was measured. `SampPre` computes in floating point, so
+  the exact preimages may differ across platforms (their validity is checked exactly before
+  release); the tests assert proof lengths within a band, not exactly.
+* **CI**: Jali and `ntru-trapdoor` (https://github.com/etairi/ntru-trapdoor) are git
+  dependencies pinned by revision, so a checkout of this repository alone resolves every
+  dependency, as in `.github/workflows/pcs.yml`. Until 2026-10-04 `ntru-trapdoor` was a path
+  dependency (`../ntru-trapdoor`), and without that sibling checkout every command that resolves
+  dependencies failed, whatever the features.

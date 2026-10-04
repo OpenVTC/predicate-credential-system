@@ -22,7 +22,7 @@ members = ["demo"]
 # docs.rs (and `cargo docs`, see .cargo/config.toml): document the optional `serde` layer, load
 # KaTeX so that the formulas render, and mark feature-gated items (`--cfg docsrs`, nightly only).
 [package.metadata.docs.rs]
-features = ["serde"]
+features = ["serde", "jali", "lattice"]
 rustdoc-args = ["--html-in-header", "docs/katex-header.html", "--cfg", "docsrs"]
 
 # arkworks 0.6.0. The crate is std-only, so `std` is switched on directly instead of being
@@ -41,12 +41,31 @@ thiserror     = "2"
 # convention of W3C Data Integrity `proofValue`s. See the module `serialization`.
 serde         = { version = "1", optional = true, default-features = false, features = ["derive", "std"] }
 multibase     = { version = "0.9", optional = true }
+# Optional (feature `jali`): Jali, the standalone lattice zero-knowledge library
+# (https://github.com/etairi/jali), the proof backend of the lattice instantiation (feature
+# `lattice`). Re-exported as `predicate_credential_system::jali`. Pinned to a commit until Jali is
+# published on crates.io; `lattice::JALI_REVISION` repeats the commit and enters the digest of the
+# lattice `pp` (a unit test keeps the two equal).
+jali          = { git = "https://github.com/etairi/jali", rev = "0cd24f38bd84e2e48d2dcb63f34d2d17cba2a90d", optional = true }
+# Optional (feature `lattice`): NTRU trapdoors (TrapGen, SampPre at arbitrary targets, exact
+# arithmetic in R_q for q = 5 mod 8) for the credential base Σ-vSIS. Not on crates.io yet: a git
+# dependency pinned by revision, as for Jali.
+ntru-trapdoor = { git = "https://github.com/etairi/ntru-trapdoor", rev = "1669474e56c1b759869bbc34d2db40b295a184a0", optional = true }
+# Optional (feature `lattice`): SHAKE128 for the random oracles of the lattice instantiation
+# (H_mat, EncPred, the expansion of pp). RustCrypto's `shake`, already in Cargo.lock as a
+# dependency of Jali (same version, no new crate): Jali exposes only a fixed-format SHAKE128 stream
+# (`rand::ShakePrg`) and ntru-trapdoor only a `hazmat` SHAKE256 without a stability promise.
+shake         = { version = "0.1", optional = true }
+# Optional (feature `parallel`): rayon, for the `k` attestation verifications of `CheckAtts_P` in
+# the lattice instantiation, which then run in parallel. Already in Cargo.lock through arkworks
+# and Jali (same version, no new crate); it has no default features.
+rayon         = { version = "1", optional = true, default-features = false }
 
 [dev-dependencies]
 # The crate itself with its test helpers switched on, so that `cargo test` compiles unit AND
 # integration tests against `hash::testing` and `cred::conformance`
 # without anyone having to pass `--features test-utils`.
-predicate-credential-system = { path = ".", features = ["test-utils", "serde"] }
+predicate-credential-system = { path = ".", features = ["test-utils", "serde", "jali", "lattice"] }
 # Second pairing engine: shows that the library code is generic over `E: Pairing`.
 ark-bn254 = "0.6.0"
 # MUST stay 0.8: `ark_std::rand` re-exports rand 0.8, newer RNGs do not satisfy its traits.
@@ -56,10 +75,14 @@ serde_json = "1"
 # TEST ONLY: the BBS crate of the Affinidi / OpenVTC stack (IETF BBS on `bls12_381_plus`), pinned,
 # for the interoperability tests of `cred::bbs::ietf` (tests/bbs_ietf_interop.rs).
 affinidi-bbs = "=0.3.3"
+# Thread pools of a chosen width for tests/lattice_parallel.rs (the attestation verifications run
+# in batches of the pool's width). Already in Cargo.lock (criterion, arkworks, Jali).
+rayon     = "1"
 
 # Benchmarks (criterion). Each one first prints the sizes of the objects it handles.
 # `pcs`: the construction at k = 5 for every public base/tag pair; `cred`: every algorithm of the
-# credential bases Σ-PS, Σ-BBS, Σ-EQ, Σ-MAC; `kiprf`: the tags Tag_DDH and Tag_DY.
+# credential bases Σ-PS, Σ-BBS, Σ-EQ, Σ-MAC; `kiprf`: the tags Tag_DDH and Tag_DY; `lattice`:
+# the lattice instantiation (Σ-vSIS, Tag_LWR and the construction at k = 1, 3, 5).
 [[bench]]
 name = "pcs"
 harness = false
@@ -72,10 +95,19 @@ harness = false
 name = "kiprf"
 harness = false
 
+[[bench]]
+name = "lattice"
+harness = false
+required-features = ["lattice"]
+
 [features]
 default     = []
-# rayon-based parallelism inside arkworks (MSM, batch normalisation, batch checks).
-parallel    = ["ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "ark-serialize/parallel"]
+# rayon-based parallelism inside arkworks (MSM, batch normalisation, batch checks), inside Jali's
+# prover and verifier when Jali is enabled (its outputs do not depend on the thread count), and,
+# in the lattice instantiation, across the `k` attestation verifications of `CheckAtts_P`
+# (`VerifyProof`, `Issue`, `Prove`): the same verdicts, with up to min(k, threads) verifications of
+# about 0.5-0.6 GiB each at once (`pcs::lattice`, "Parallel verification of the attestations").
+parallel    = ["ark-ec/parallel", "ark-ff/parallel", "ark-std/parallel", "ark-serialize/parallel", "jali?/parallel", "dep:rayon"]
 # x86_64 (bmi2 + adx) assembly backend of ark-ff; a no-op on other targets.
 asm         = ["ark-ff/asm"]
 # Nested wall-clock timings from `ark_std::{start_timer, end_timer}`.
@@ -86,6 +118,12 @@ print-trace = ["ark-std/print-trace"]
 test-utils  = []
 # `serde::{Serialize, Deserialize}` for the protocol objects: see the module `serialization`.
 serde       = ["dep:serde", "dep:multibase"]
+# The lattice zero-knowledge library Jali (github.com/etairi/jali), re-exported as `jali`.
+jali        = ["dep:jali"]
+# The post-quantum (lattice) instantiation: the credential base `cred::VSIS` (Σ-vSIS), the tag
+# `kiprf::LWR` (short-key Tag_LWR), the module `lattice` and the construction
+# `pcs::lattice::LatticePCS`. Jali's `serde` loads the embedded parameter sets (`TboxParams::from_json`).
+lattice     = ["jali", "jali/serde", "dep:ntru-trapdoor", "dep:shake"]
 
 # Optimise test builds: the tests are dominated by pairings and scalar multiplications.
 [profile.test]

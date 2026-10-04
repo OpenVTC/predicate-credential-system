@@ -119,6 +119,22 @@ pub enum Error {
     #[error("public parameters are not an output of Setup: {0}")]
     InvalidPublicParameters(&'static str),
 
+    // ----- lattice instantiation (feature `lattice`) -----------------------------------------
+    /// The helper key has answered `Q_max = 2^48` calls of `SampPre` (`Sign` and `BlindIssue` of
+    /// `Σ-vSIS`): the issuance cap of the paper's post-quantum instantiation ("Issuance cap").
+    /// The helper rotates its key (`HKeyGen`) and publishes the new `hvk`; the key refuses to
+    /// sign from now on.
+    #[cfg(feature = "lattice")]
+    #[error("issuance cap reached: the helper key has answered Q_max = 2^48 preimage requests")]
+    IssuanceCapReached,
+    /// A failure inside the lattice backends (Jali or `ntru-trapdoor`) that is not one of the
+    /// paper's `⊥`: a parameter set refused at load time, a prover that exhausted its restarts
+    /// with fresh seeds, a sampler that exhausted its attempts. Carried as the backend's display
+    /// string, like the other foreign errors.
+    #[cfg(feature = "lattice")]
+    #[error("lattice backend error: {0}")]
+    LatticeBackend(String),
+
     // ----- encoding / hashing --------------------------------------------------------------
     /// An object handed to an algorithm contains a value that is NOT an element of the group its
     /// type stands for: a point that is not on the curve, or not in the prime-order subgroup

@@ -8,6 +8,12 @@ credentialed users, none of whom is the user itself. Built on [arkworks](https:/
 
 > **Research artifact.** Not audited. See [Security](#security).
 
+The standalone [Jali library](https://github.com/etairi/jali) implements lattice-based
+zero-knowledge proofs, currently the LNP22 proof stack described in the
+[Rust port plan](./docs/lnp22-rust-port-plan.md). It lives in its own repository; this crate
+depends on it as a git dependency (feature `jali`), and its post-quantum instantiation (feature
+`lattice`) proves its relations with it. See Jali's README for its status and limits.
+
 ## Overview
 
 `predicate-credential-system` (imported as `predicate_credential_system`) follows the paper's
@@ -27,23 +33,30 @@ and (optionally) attribute policy:
 type Scheme = PCS<Bls12_381, PS<Bls12_381>, DDH<G1Projective, G1Hasher>>;
 ```
 
+The post-quantum instantiation is `LatticePCS` (feature `lattice`): the lattice credential base
+`Σ-vSIS` on an NTRU trapdoor, the short-key LWR tag, and [Jali](https://github.com/etairi/jali)
+proofs in place of the sigma protocols, behind the same trait.
+
 ## Modules
 
 | Module | Description |
 |--------|-------------|
-| `pcs` | The construction (paper §5.1): trait `PredicateCredentialSystem` (the ten algorithms of §4) and its implementation `PCS<E, B, T, P>`, predicates and `EncPred`, attribute policies, root credentials, the fixed-format codec that reproduces the paper's sizes. |
-| `cred` | Credential bases (§3.2): `PS` (Pointcheval-Sanders, the main instantiation), `BBS`, `EQ` (SPS-EQ) and the designated-verifier `MAC`, behind the traits `CredentialBase` / `SigmaFriendlyCredentialBase`. `cred::bbs::ietf` derives the `BBS` generators as IETF BBS does. |
-| `kiprf` | Key-injective PRFs, the tags (§3.1): `DDH` (`Tag_DDH`) and `DY` (`Tag_DY`, Dodis-Yampolskiy), with a stand-alone tag proof. |
+| `pcs` | The construction (paper §5.1): trait `PredicateCredentialSystem` (the ten algorithms of §4) and its implementation `PCS<E, B, T, P>`, predicates and `EncPred`, attribute policies, root credentials, the fixed-format codec that reproduces the paper's sizes. With `lattice`, `pcs::lattice::LatticePCS<P>`, the post-quantum instantiation (§5.2), with its relations, contexts and codec. |
+| `cred` | Credential bases (§3.2): `PS` (Pointcheval-Sanders, the main instantiation), `BBS`, `EQ` (SPS-EQ) and the designated-verifier `MAC`, behind the traits `CredentialBase` / `SigmaFriendlyCredentialBase`; with `lattice`, `VSIS` (`Σ-vSIS`) behind `CredentialBase`. `cred::bbs::ietf` derives the `BBS` generators as IETF BBS does. |
+| `kiprf` | Key-injective PRFs, the tags (§3.1): `DDH` (`Tag_DDH`) and `DY` (`Tag_DY`, Dodis-Yampolskiy), with a stand-alone tag proof; with `lattice`, `LWR` (the short-key `Tag_LWR`). |
+| `lattice` | Feature `lattice`: the shared foundations of the post-quantum instantiation, i.e. its parameter set, the ring types `Rq`, `Ternary`, `BinaryPoly`, the SHAKE128 oracles `H_mat`, `H_0`, `EncPred`, and Jali's parameter sets, embedded and pinned by SHA-256. |
 | `sigma` | Sigma protocols (§2.3): linear relations over `G_1`, `G_2`, `G_T` with shared witness variables, the interactive protocol with simulator and extractor, and the strong Fiat-Shamir transform with compact `(c, z)` proofs. |
 | `hash` | The random oracles `H_0`, `H_1`, `H_2` (§2.1) and the transcript; hash-to-curve for BLS12-381. |
 | `serialization` | Validated compressed byte encoding; with the `serde` feature also JSON forms (multibase strings). |
 | `error` | The error type `Error`: every `⊥` of the paper is a variant. |
 
-`PCS`, `PredicateCredentialSystem` and `Error` are re-exported at the crate root.
+`PCS`, `PredicateCredentialSystem` and `Error` are re-exported at the crate root, and so is
+`LatticePCS` with the feature `lattice`.
 
 ## Instantiations
 
-Sizes are bytes over BLS12-381 in the fixed-format encoding, as asserted by the tests.
+Sizes are bytes in the fixed-format encoding, as asserted by the tests: over BLS12-381 for the
+pairing bases, at Jali proof degree 128 for the lattice base.
 
 | Credential base | Type | Tags | `att` | `π` (`k = 5`) | `cred` |
 |-----------------|------|------|-------|---------------|--------|
@@ -51,20 +64,34 @@ Sizes are bytes over BLS12-381 in the fixed-format encoding, as asserted by the 
 | `Σ-BBS` | `cred::BBS<E, H>` | `DDH`, `DY` | 416 | 2272 | 112 |
 | `Σ-EQ` | `cred::EQ<E>` | `DDH` only (`Setup` refuses `DY`) | 480 | 2512 | 192 |
 | `Σ-MAC` | `cred::MAC<G, H>` | base and possession proof only | | | |
+| `Σ-vSIS` | `cred::VSIS` (feature `lattice`) | `LWR` (short-key `Tag_LWR`) | ≈ 83,600 | ≈ 462,100 | 5888 |
+
+The `Σ-vSIS` row is the post-quantum instantiation `LatticePCS`: ring degree 1024 with
+`q = 2^20 − 3`, the short-key LWR tag (tag set R) and Jali proofs at proof degree 128, under
+parameters at an estimated 128-bit security level. `att` and `π` carry Jali proofs (about 83.1 KB
+for `R_att` and 41.1 KB for `R_issue`; `π` also holds the `k` attestations), whose lengths vary by
+tens of bytes with the proof seed, so the row gives rounded means.
+At `k = 5` on an Apple M4, one thread / with the feature `parallel` on ten cores: `Attest`
+5.9 / 3.0 s, `VerifyAtt` 3.0 / 1.6 s, `Prove` 17.5 / 5.8 s, `VerifyProof` 15.4 / 4.0 s and
+`Issue` 15.4 / 3.9 s; `HKeyGen` takes 6 ms, `Unblind` and `VerifyCred` 0.14 ms. Peak memory is
+about 0.6 GiB at one thread and 2.5 GiB with `parallel`. Every figure, including other `k`:
+[Testing and benchmarks](./docs/testing-and-benchmarks.md).
 
 The designated-verifier variant of the construction for `Σ-MAC` is not implemented yet. Out of
-scope: the post-quantum instantiations, the SNARK-based variant and straight-line extractable
-proof compilers.
+scope: the private credential requests (PRC) of the paper's appendix for the lattice
+instantiation, the SNARK-based variant and straight-line extractable proof compilers.
 
 ## Feature Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `serde` | no | `Serialize` / `Deserialize` for the protocol objects: multibase base58btc strings and camelCase JSON objects. See [Encodings](./docs/encodings.md). |
-| `parallel` | no | rayon-based parallelism inside arkworks. |
+| `parallel` | no | rayon-based parallelism inside arkworks, inside Jali's prover and verifier when Jali is enabled, and across the `k` attestation verifications of the lattice `VerifyProof`, `Issue` and `Prove` (the same verdicts; up to `min(k, threads)` verifications of 0.5-0.6 GiB each at once, bounded by `RAYON_NUM_THREADS` or a rayon pool of your own). |
 | `asm` | no | Assembly backend of `ark-ff` on x86_64. |
 | `print-trace` | no | Nested timings from `ark_std`. |
 | `test-utils` | no | Test helpers, including an INSECURE hash-to-group oracle. Never enable in a deployment. |
+| `jali` | no | Re-exports [Jali](https://github.com/etairi/jali), the standalone lattice zero-knowledge library, as `predicate_credential_system::jali`. It is the proof backend of the lattice instantiation. |
+| `lattice` | no | The post-quantum instantiation: `cred::VSIS`, `kiprf::LWR`, the module `lattice` and `pcs::lattice::LatticePCS` (re-exported as `LatticePCS`). Enables `jali` (with Jali's `serde`, which loads the embedded parameter sets), `ntru-trapdoor` and `shake`. Jali and `ntru-trapdoor` are git dependencies pinned by revision. |
 
 ## Usage
 
@@ -144,6 +171,49 @@ default policy `P ≡ 1` and must serve a closed set of predicates: see
 [Operating a helper](./docs/operating-a-helper.md). `to_compact_bytes` / `from_compact_bytes`
 and the `serde` feature put proofs on the wire: see [Encodings](./docs/encodings.md).
 
+The post-quantum instantiation runs the same flow through the same trait (feature `lattice`).
+Each attestation is a Jali proof of about 83 KB that takes seconds to prove and to verify, so
+this example is compiled but not run by the documentation tests:
+
+```rust,no_run
+use predicate_credential_system::{
+    LatticePCS,
+    pcs::{Predicate, PredicateCredentialSystem, SetupParams},
+    Error,
+};
+use rand::rngs::OsRng;
+
+fn main() -> Result<(), Error> {
+    let mut rng = OsRng;
+    let f_founder = Predicate::root(b"founders".to_vec());
+    let f_member = Predicate::new(2, b"members".to_vec());
+    let open = LatticePCS::setup(SetupParams::new(b"example.org/community".to_vec()))?;
+    // the issuer counts vouches from founders and members only
+    let policy = open.allow_list([&f_founder, &f_member]);
+    let pcs = LatticePCS::from_public_parameters(open.public_parameters().clone(), policy)?;
+    let (hvk, hsk) = pcs.helper_keygen(&mut rng); // an NTRU trapdoor
+
+    let mut vouchers = Vec::new();
+    for _ in 0..2 {
+        let (id_j, usk_j) = pcs.user_keygen(&mut rng)?;
+        let (request, state) = pcs.root_request(&hvk, &f_founder, &id_j, &usk_j, &mut rng)?;
+        let pre = pcs.issue_root(&hvk, &hsk, &f_founder, &id_j, &request, &mut rng)?;
+        let cred_j = pcs.unblind(&hvk, &usk_j, &f_founder, &pre, &state)?;
+        vouchers.push((usk_j, cred_j));
+    }
+    let (id_c, usk_c) = pcs.user_keygen(&mut rng)?;
+    let mut vouches = Vec::new();
+    for (usk_j, cred_j) in &vouchers {
+        vouches.push(pcs.attest(&hvk, usk_j, &f_founder, cred_j, &id_c, &mut rng)?);
+    }
+    let (proof, state) = pcs.prove(&hvk, &f_member, &id_c, &usk_c, &vouches, &mut rng)?;
+    let pre = pcs.issue(&hvk, &hsk, &f_member, &id_c, &proof, &mut rng)?; // VerifyProof first
+    let cred_c = pcs.unblind(&hvk, &usk_c, &f_member, &pre, &state)?;
+    assert!(pcs.verify_cred(&hvk, &usk_c, &f_member, &cred_c));
+    Ok(())
+}
+```
+
 ## Building and Testing
 
 Rust 1.95.0 or higher (edition 2024).
@@ -152,6 +222,21 @@ Rust 1.95.0 or higher (edition 2024).
 cargo build
 cargo test                        # unit, integration and documentation tests
 cargo bench --bench pcs           # also: --bench cred, --bench kiprf
+```
+
+`cargo test` compiles the lattice instantiation too (the crate's dev-dependency on itself
+enables `lattice`) and runs its light tests. Its end-to-end flows and attacks run Jali proofs of
+seconds and about 0.5 GiB each, so they run in release, one at a time:
+
+```bash
+cargo test --release --features lattice --test lattice_pcs     # the k = 1 flow, about 30 s
+RUST_TEST_THREADS=1 cargo test --release --features lattice \
+    --test lattice_flows --test lattice_attacks -- --ignored    # the harness's flows at k = 3, 5; attacks
+RUST_TEST_THREADS=1 cargo test --release --features lattice \
+    --test lattice_pcs --test lattice_adversarial --test lattice_sizes -- --ignored  # more flows, sizes
+RUST_TEST_THREADS=1 cargo test --release --features lattice,parallel \
+    --test lattice_parallel -- --ignored     # CheckAtts_P in parallel; run it without, too
+cargo bench --bench lattice --features lattice                  # about 18 minutes at one thread
 ```
 
 Each benchmark first prints the sizes of the objects it handles. Before a change is proposed:
@@ -168,8 +253,9 @@ RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
 cargo docs
 ```
 
-builds the API documentation with the `serde` layer and rendered formulas, and opens it. It is
-an alias (`.cargo/config.toml`) that hands `docs/katex-header.html` to rustdoc, as the
+builds the API documentation with the `serde` layer, the `jali` re-export, the lattice
+instantiation and rendered formulas, and opens it. It is an alias (`.cargo/config.toml`) that hands
+`docs/katex-header.html` to rustdoc, as the
 `[package.metadata.docs.rs]` section of `Cargo.toml` does for docs.rs. Formulas are written
 inside code (`` $`…`$ `` inline, `math` code blocks for display) and rendered with
 [KaTeX](https://katex.org) loaded from a CDN; a plain `cargo doc` shows their LaTeX source.
@@ -190,6 +276,16 @@ inside code (`` $`…`$ `` inline, `math` code blocks for display) and rendered 
 - **No unsafe code** — `#![forbid(unsafe_code)]`.
 - **The helper's policy decides** — the construction is as strong as the helper's admission
   decisions; see [Operating a helper](./docs/operating-a-helper.md).
+- **The lattice instantiation is not covered by a security theorem yet** — the paper
+  references its post-quantum theorem without stating it. Jali, `SampPre` and `TrapGen` run in
+  variable time. The helper's RNG must be the operating system's
+  CSPRNG (the trapdoor is a function of it). A helper key answers at most `Q_max = 2^48`
+  issuances and counts them in `hsk`: run one live instance per key and store `hsk` before
+  issuing (`to_bytes_reserving`). Every preimage is checked exactly before it leaves the key;
+  each attestation verification takes about 0.5 GiB, and with `parallel` a request verifies up
+  to `min(k, threads)` of them at once. See
+  [Operating a helper](./docs/operating-a-helper.md#the-lattice-instantiation-feature-lattice)
+  and [Design notes](./docs/design-notes.md#limitations-of-the-lattice-instantiation).
 
 ## Additional Resources
 

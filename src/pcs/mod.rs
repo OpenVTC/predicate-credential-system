@@ -11,6 +11,7 @@
 //! | `ctx_j`, `ctx_0` | [`context`] |
 //! | "parse `π` in a fixed format" (§5.5); the sizes of the comparison table (§5.3) | [`codec`] |
 //! | "compatible" parameters of `Setup` step 1 | [`check_compatibility`], [`check_dv_compatibility`] |
+//! | the post-quantum instantiation of the box (`Σ-vSIS`, `Tag_LWR`, Jali proofs; feature `lattice`) | `lattice::LatticePCS`, which implements the trait |
 //!
 //! [`PCS`] covers the publicly verifiable bases `Σ-PS`, `Σ-BBS` and `Σ-EQ`. "The displayed
 //! `Σ-MAC` candidate does not instantiate this box as written: using it requires a
@@ -45,8 +46,9 @@
 //!   return and outputs `⊥` ([`Error::InvalidPreCredential`]) if that fails, so that a wrong
 //!   answer of the helper is noticed at issuance and not at the first `Attest`. The box returns
 //!   `cred` unverified; honest executions are unaffected, and the syntax has room for it
-//!   (`Unblind → cred / ⊥`; the box of the out-of-scope `Σ-vSIS` base verifies inside its own
-//!   `Unblind`). The check presupposes a well-formed
+//!   (`Unblind → cred / ⊥`; the box of the lattice base `Σ-vSIS` verifies inside its own
+//!   `Unblind`, and the lattice construction, `lattice::LatticePCS`, relies on exactly that and
+//!   verifies once). The check presupposes a well-formed
 //!   `hvk` ([`CredentialBase::is_well_formed_key`](crate::cred::CredentialBase::is_well_formed_key)).
 //!   The designated-verifier variant cannot do this: a user has no `dvk` and "cannot verify a
 //!   credential alone" (after Def. "Designated-verifier credential base").
@@ -78,6 +80,8 @@
 pub mod codec;
 pub mod construction;
 pub mod context;
+#[cfg(feature = "lattice")]
+pub mod lattice;
 pub mod predicate;
 #[cfg(test)]
 pub(crate) mod test_support;

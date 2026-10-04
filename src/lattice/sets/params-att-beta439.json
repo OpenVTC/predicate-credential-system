@@ -1,0 +1,32 @@
+{
+  "id": "pcs128-g15-k16-mdef-d128-att-beta439",
+  "prime_factors": [
+    "1601211492451284803101"
+  ],
+  "degree": 128,
+  "m1": 72,
+  "l": 26,
+  "alpha_squared": 9216,
+  "n_bin": 72,
+  "l2_rows": [
+    16
+  ],
+  "l2_bounds_squared": [
+    90803788942
+  ],
+  "n_prime": 10,
+  "linf_bound": 9885408835,
+  "m2": 66,
+  "n_msis": 6,
+  "log_sigma": [
+    16,
+    12,
+    24,
+    44
+  ],
+  "gamma": 2097150,
+  "d_bits": 13,
+  "mlwe_rank": 27,
+  "mlwe_delta": 1.0036002245562166,
+  "estimator": "jali-params 3; request sha256 7bedb1f0469b4c2b; policy beta>=439; MLWE uSVP (ADPS16) beta 462 delta 1.0036002245562166; MSIS closed form beta 439 delta 1.003732639"
+}

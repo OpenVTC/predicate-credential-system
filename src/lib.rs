@@ -20,9 +20,14 @@
 //! | §5.1 `R_att`, `R_issue`, `ctx_j`, `ctx_0` | [`pcs::PCS::attestation_relation`], [`pcs::PCS::issuance_relation`], [`pcs::context`] |
 //! | Remark "Chaining and the base case": root credentials | [`pcs::PCS::root_request`], [`pcs::PCS::issue_root`] |
 //! | §5.3 sizes of attestations and proofs | [`pcs::codec`] (fixed-format encoding) |
+//! | §5.2 the post-quantum instantiation: `Σ-vSIS`, the short-key `Tag_LWR`, Jali proofs (feature `lattice`) | `pcs::lattice::LatticePCS` (re-exported as `LatticePCS`), `cred::vsis`, `kiprf::lwr`, `lattice` |
 //!
 //! Supporting modules: [`error`] (every `⊥` of the paper is an [`Error`]) and
-//! [`serialization`] (the byte encoding of protocol objects).
+//! [`serialization`] (the byte encoding of protocol objects). With the feature `jali`, the
+//! standalone lattice zero-knowledge library Jali is re-exported as `jali`; with the feature
+//! `lattice`, the module `lattice` holds the shared foundations of the post-quantum
+//! instantiation (the parameter set, the ring types, the random oracles and Jali's embedded
+//! parameter sets).
 //!
 //! ## Getting started
 //!
@@ -35,6 +40,12 @@
 //! verifiable bases `Σ-PS`, `Σ-BBS` and `Σ-EQ` are supported, each with `Tag_DDH` or `Tag_DY`
 //! (`Σ-EQ`: `Tag_DDH` only). The designated-verifier variant of the construction for `Σ-MAC` is
 //! not implemented yet; the base itself is.
+//!
+//! The post-quantum instantiation is `LatticePCS` (feature `lattice`): the lattice base `Σ-vSIS`
+//! with an NTRU trapdoor (the sibling crate `ntru-trapdoor`), the short-key LWR tag, and Jali
+//! proofs for `R_att` and `R_issue`. It implements the same trait; its module docs
+//! (`pcs::lattice`) map it to the paper and contain the same flow. An attestation is a proof of
+//! about 83 KB that takes seconds and about 0.5 GiB to prove or to verify.
 //!
 //! ## Conventions
 //!
@@ -72,8 +83,14 @@
 //!   on drop where this crate owns them, but field elements are `Copy` and temporaries may stay
 //!   on the stack.
 //! * **Plain Fiat-Shamir.** Proofs are Fiat-Shamir-compiled sigma protocols in the random-oracle
-//!   model; knowledge extraction is by rewinding. Straight-line extractable compilers, the
-//!   post-quantum instantiation and the SNARK-based variant of the paper are out of scope.
+//!   model; knowledge extraction is by rewinding. Straight-line extractable compilers and the
+//!   SNARK-based variant of the paper are out of scope, and so are the private credential
+//!   requests of the paper's appendix for the post-quantum instantiation.
+//! * **The post-quantum instantiation** (feature `lattice`) runs Jali, whose proofs are
+//!   Fiat-Shamir with extraction by rewinding, where the paper assumes an online-extractable
+//!   argument, and whose arithmetic, sampling and decoding run in variable time, as do `SampPre`
+//!   and `TrapGen`. No security theorem covers it yet: the paper references `thm:pq-security`
+//!   but does not state it.
 
 // docs.rs builds with `--cfg docsrs` on nightly: feature-gated items get an "Available on crate
 // feature …" badge. Stable builds never see the attribute.
@@ -94,15 +111,26 @@ pub mod cred;
 pub mod error;
 pub mod hash;
 pub mod kiprf;
+#[cfg(feature = "lattice")]
+pub mod lattice;
 pub mod pcs;
 mod sample;
 pub mod serialization;
 pub mod sigma;
 
+#[cfg(feature = "lattice")]
+pub use crate::pcs::lattice::LatticePCS;
 pub use crate::{
     error::Error,
     pcs::{PCS, PredicateCredentialSystem},
 };
+
+/// Jali, the standalone lattice zero-knowledge library (<https://github.com/etairi/jali>),
+/// re-exported with the feature `jali`. It is the proof backend of the post-quantum
+/// instantiation (feature `lattice`), which proves `R_att` and `R_issue` with its statement
+/// compiler.
+#[cfg(feature = "jali")]
+pub use jali;
 
 /// Compiles and runs the Rust code blocks of `README.md` under `cargo test --doc`, so that the
 /// examples shown there cannot drift away from the API. Not part of the library.

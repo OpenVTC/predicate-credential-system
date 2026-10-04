@@ -23,6 +23,8 @@
 
 pub mod ddh;
 pub mod dy;
+#[cfg(feature = "lattice")]
+pub mod lwr;
 
 use core::fmt::Debug;
 
@@ -31,6 +33,8 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::rand::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 
+#[cfg(feature = "lattice")]
+pub use self::lwr::LWR;
 pub use self::{ddh::DDH, dy::DY};
 use crate::{
     error::Error,

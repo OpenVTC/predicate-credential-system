@@ -72,6 +72,8 @@ pub mod conformance;
 pub mod eq;
 pub mod mac;
 pub mod ps;
+#[cfg(feature = "lattice")]
+pub mod vsis;
 
 use core::fmt::Debug;
 
@@ -81,6 +83,8 @@ use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::rand::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 
+#[cfg(feature = "lattice")]
+pub use self::vsis::VSIS;
 pub use self::{bbs::BBS, eq::EQ, mac::MAC, ps::PS};
 use crate::{
     error::Error,
