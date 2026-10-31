@@ -18,6 +18,17 @@ persistence.
 cargo test -p pcs-vetting-prototype --release
 ```
 
+To watch it instead, step through the narrated walkthrough. It prints every group element
+that goes over the wire, recomputes the equations live, and shows the submission in its wire
+form. It is written for an audience of cryptographers:
+
+```sh
+cargo run -p pcs-vetting-prototype --release --example walkthrough
+```
+
+Enter goes to the next stage, `b` goes back, a number jumps to that stage, and `q` quits.
+`--auto` prints every stage at once.
+
 It is a workspace member of this repository (`publish = false`) and depends on the
 `predicate-credential-system` crate one directory up.
 
