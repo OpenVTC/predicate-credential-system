@@ -39,6 +39,12 @@ impl ApplicantEngine {
         &self.id
     }
 
+    /// DEMO HOOK for the walkthrough: the secret key, so `T_0` can be recomputed live.
+    #[doc(hidden)]
+    pub fn usk_scalar(&self) -> &crate::scheme::Fr {
+        self.usk.expose_scalar()
+    }
+
     pub fn held(&self) -> usize {
         self.held.len()
     }

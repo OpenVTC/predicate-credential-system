@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 
 use predicate_credential_system::{
+    cred::ps::PSPreCredential,
     kiprf::{KIPRF, prove_tag},
-    pcs::{Credential, PredicateCredentialSystem, UserSecretKey},
+    pcs::{Credential, PredicateCredentialSystem, RootRequest, UserSecretKey},
     sigma::FSProof,
 };
 use rand::{CryptoRng, RngCore};
@@ -15,9 +16,16 @@ use crate::{
     ProtoError,
     meta::StatementMeta,
     scheme::{Base, E, Fr, G1, point_text, scalar_text, vetter_predicate},
-    token::{Reservation, TokenWallet},
+    token::{Reservation, TokenRequest, TokenWallet},
     vtc::{Vtc, withdraw_context},
 };
+
+/// What one root enrolment sent and got back (for the walkthrough).
+#[doc(hidden)]
+pub struct EnrollTrace {
+    pub request: RootRequest<E, Base>,
+    pub pre: PSPreCredential<E>,
+}
 
 /// An attestation as the applicant receives it (`vetting/attestation/0.1`).
 #[derive(Debug, Clone)]
@@ -70,6 +78,16 @@ impl VetterEngine {
         vtc: &mut Vtc,
         rng: &mut R,
     ) -> Result<(), ProtoError> {
+        self.enroll_traced(vtc, rng).map(|_| ())
+    }
+
+    /// [`Self::enroll`], returning what went over the wire, for the walkthrough.
+    #[doc(hidden)]
+    pub fn enroll_traced<R: RngCore + CryptoRng>(
+        &mut self,
+        vtc: &mut Vtc,
+        rng: &mut R,
+    ) -> Result<EnrollTrace, ProtoError> {
         let period = vtc.current_period().to_string();
         let f = vetter_predicate(&period);
         let (request, state) = vtc
@@ -78,7 +96,7 @@ impl VetterEngine {
         let pre = vtc.issue_vetter_root(&self.member, &self.id, &request, rng)?;
         let cred = vtc.open().unblind(vtc.hvk(), &self.usk, &f, &pre, &state)?;
         self.creds.insert(period, cred);
-        Ok(())
+        Ok(EnrollTrace { request, pre })
     }
 
     /// One scheduled drip fetch: unconditional, `r` tokens.
@@ -90,6 +108,19 @@ impl VetterEngine {
         r: usize,
         rng: &mut R,
     ) -> Result<(), ProtoError> {
+        self.drip_traced(vtc, tick, label, r, rng).map(|_| ())
+    }
+
+    /// [`Self::drip`], returning the commitments and the blind signatures, for the walkthrough.
+    #[doc(hidden)]
+    pub fn drip_traced<R: RngCore + CryptoRng>(
+        &mut self,
+        vtc: &mut Vtc,
+        tick: u32,
+        label: &str,
+        r: usize,
+        rng: &mut R,
+    ) -> Result<(Vec<TokenRequest>, Vec<PSPreCredential<E>>), ProtoError> {
         let tvk = vtc.tokens.tvk().clone();
         let reqs = self
             .wallet
@@ -97,7 +128,20 @@ impl VetterEngine {
         let pres = vtc.drip(&self.member, tick, label, &reqs, rng)?;
         self.wallet.receive(&tvk, &pres)?;
         self.wallet.expire(vtc.tokens.live_labels());
-        Ok(())
+        Ok((reqs, pres))
+    }
+
+    /// DEMO HOOK for the walkthrough: the secret key, so tags and pairings can be recomputed
+    /// in front of an audience. Never exposed by a real engine.
+    #[doc(hidden)]
+    pub fn usk_scalar(&self) -> &Fr {
+        self.usk.expose_scalar()
+    }
+
+    /// DEMO HOOK for the walkthrough: the root credential held for `period`.
+    #[doc(hidden)]
+    pub fn credential(&self, period: &str) -> Option<&Credential<E, Base>> {
+        self.creds.get(period)
     }
 
     /// Tokens whose label closed are gone.
