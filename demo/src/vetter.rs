@@ -17,6 +17,7 @@ use crate::{
     meta::StatementMeta,
     scheme::{Base, E, Fr, G1, point_text, scalar_text, vetter_predicate},
     token::{Reservation, TokenRequest, TokenWallet},
+    trace,
     vtc::{Vtc, withdraw_context},
 };
 
@@ -55,7 +56,12 @@ impl VetterEngine {
         vtc: &Vtc,
         rng: &mut R,
     ) -> Result<Self, ProtoError> {
-        let (id, usk) = vtc.open().user_keygen(rng)?;
+        let (id, usk) = trace::span(
+            member,
+            "PCS::user_keygen",
+            "UKeyGen: usk ← Z_p*, id = Tag(usk, c_0) = g_1^usk",
+            || vtc.open().user_keygen(rng),
+        )?;
         Ok(Self {
             member: member.to_string(),
             usk,
@@ -90,11 +96,27 @@ impl VetterEngine {
     ) -> Result<EnrollTrace, ProtoError> {
         let period = vtc.current_period().to_string();
         let f = vetter_predicate(&period);
-        let (request, state) = vtc
-            .open()
-            .root_request(vtc.hvk(), &f, &self.id, &self.usk, rng)?;
-        let pre = vtc.issue_vetter_root(&self.member, &self.id, &request, rng)?;
-        let cred = vtc.open().unblind(vtc.hvk(), &self.usk, &f, &pre, &state)?;
+        let (request, state) = trace::span(
+            &self.member,
+            "PCS::root_request",
+            "Prove with no attestations, under ctx_root: C, T_0, π_root",
+            || {
+                vtc.open()
+                    .root_request(vtc.hvk(), &f, &self.id, &self.usk, rng)
+            },
+        )?;
+        let pre = trace::span(
+            "VTC",
+            "Vtc::issue_vetter_root",
+            "grant, one id per member, one credential per period; then issue_root",
+            || vtc.issue_vetter_root(&self.member, &self.id, &request, rng),
+        )?;
+        let cred = trace::span(
+            &self.member,
+            "PCS::unblind",
+            "Unblind: σ = (σ̂_1, σ̂_2 / σ̂_1^ρ), kept only if VerifyCred accepts",
+            || vtc.open().unblind(vtc.hvk(), &self.usk, &f, &pre, &state),
+        )?;
         self.creds.insert(period, cred);
         Ok(EnrollTrace { request, pre })
     }
@@ -122,11 +144,24 @@ impl VetterEngine {
         rng: &mut R,
     ) -> Result<(Vec<TokenRequest>, Vec<PSPreCredential<E>>), ProtoError> {
         let tvk = vtc.tokens.tvk().clone();
-        let reqs = self
-            .wallet
-            .prepare(&tvk, label, &self.member, tick, r, rng)?;
-        let pres = vtc.drip(&self.member, tick, label, &reqs, rng)?;
-        self.wallet.receive(&tvk, &pres)?;
+        let reqs = trace::span(
+            &self.member,
+            "TokenWallet::prepare",
+            "fresh serials s_i; C_i = g_1^ρ_i · Y_1t^s_i with a PoK of each opening",
+            || self.wallet.prepare(&tvk, label, &self.member, tick, r, rng),
+        )?;
+        let pres = trace::span(
+            "VTC",
+            "Vtc::drip",
+            "grant check; at most once per (member, label, tick)",
+            || vtc.drip(&self.member, tick, label, &reqs, rng),
+        )?;
+        trace::span(
+            &self.member,
+            "TokenWallet::receive",
+            "Unblind each token, keep it only if it verifies under tvk",
+            || self.wallet.receive(&tvk, &pres),
+        )?;
         self.wallet.expire(vtc.tokens.live_labels());
         Ok((reqs, pres))
     }
@@ -195,7 +230,12 @@ impl VetterEngine {
             .find(|p| self.creds.contains_key(*p))
             .cloned()
             .ok_or(ProtoError::NoLiveCredential)?;
-        let token = self.wallet.spend(vtc.tokens.tvk(), reservation, rng)?;
+        let token = trace::span(
+            &self.member,
+            "TokenWallet::spend",
+            "re-randomise the token's PS signature and reveal its serial",
+            || self.wallet.spend(vtc.tokens.tvk(), reservation, rng),
+        )?;
         self.attest_with_token(vtc, &period, token, applicant_id, meta, rng)
     }
 
@@ -215,14 +255,21 @@ impl VetterEngine {
         meta.token_label = token.label.clone();
         meta.token_serial = scalar_text(&token.serial)?;
         let app = meta.context_bytes()?;
-        let attestation = vtc.open().attest_in_context(
-            vtc.hvk(),
-            &self.usk,
-            &vetter_predicate(&period),
-            &self.creds[&period],
-            applicant_id,
-            &app,
-            rng,
+        let attestation = trace::span(
+            &self.member,
+            "PCS::attest_in_context",
+            "Attest: T_j = H_2(s)^usk, cred*_j = ReRand(σ), π_j under ctx_j with app_j",
+            || {
+                vtc.open().attest_in_context(
+                    vtc.hvk(),
+                    &self.usk,
+                    &vetter_predicate(&period),
+                    &self.creds[&period],
+                    applicant_id,
+                    &app,
+                    rng,
+                )
+            },
         )?;
         self.attested += 1;
         self.log.push((*applicant_id, meta.clone()));
@@ -267,7 +314,12 @@ impl VetterEngine {
             .eval(self.usk.expose_scalar(), &s)
             .ok_or(predicate_credential_system::Error::UndefinedTag)?;
         let ctx = withdraw_context(&vtc.community, &point_text(applicant_id)?);
-        let proof = prove_tag(prf, self.usk.expose_scalar(), &tag, &s, &ctx, rng)?;
+        let proof = trace::span(
+            &self.member,
+            "kiprf::prove_tag",
+            "PoK{ K : T = H_2(s)^K } under the withdrawal context",
+            || prove_tag(prf, self.usk.expose_scalar(), &tag, &s, &ctx, rng),
+        )?;
         Ok((tag, proof))
     }
 }

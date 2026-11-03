@@ -28,6 +28,7 @@ use crate::{
         hidden_vetting_predicate, monthly_token_label, point_text, scalar_text, vetter_predicate,
     },
     token::{SpendOutcome, TokenIssuer, TokenSpend},
+    trace,
 };
 
 type Hvk = <Base as predicate_credential_system::cred::CredentialBase>::VerificationKey;
@@ -107,16 +108,36 @@ impl Vtc {
         requirements: serde_json::Value,
         rng: &mut R,
     ) -> Result<Self, ProtoError> {
-        let open = Open::setup(SetupParams::new(deployment_label(community)))?;
+        let open = trace::span(
+            "VTC",
+            "PCS::setup",
+            "Setup: pp (H_0, H_1, H_2, c_0) derived from the deployment label",
+            || Open::setup(SetupParams::new(deployment_label(community))),
+        )?;
         // hvk is long-lived: generated once, bound to the fixed pp.
-        let (hvk, hsk) = open.helper_keygen(rng);
-        let helper = Self::helper_for(&open, &[period.to_string()])?;
+        let (hvk, hsk) = trace::span_any(
+            "VTC",
+            "PCS::helper_keygen",
+            "HKeyGen: hsk = (x, y_1, y_2), hvk = (X̃, Ỹ_1, Ỹ_2, Y_1)",
+            || open.helper_keygen(rng),
+        );
+        let helper = trace::span(
+            "VTC",
+            "PCS::allow_list",
+            "the helper's policy P: an AllowList of the live vetter classes",
+            || Self::helper_for(&open, &[period.to_string()]),
+        )?;
         let requirements_digest =
             vta_sdk::vetting::requirements::requirements_digest(&requirements)
                 .map_err(|e| ProtoError::Serialization(e.to_string()))?;
         let requirements: VettingRequirements = serde_json::from_value(requirements)
             .map_err(|e| ProtoError::Serialization(e.to_string()))?;
-        let mut tokens = TokenIssuer::new(community, rng)?;
+        let mut tokens = trace::span(
+            "VTC",
+            "TokenIssuer::new",
+            "a second PS key (tvk, tsk) for tokens, under its own deployment label",
+            || TokenIssuer::new(community, rng),
+        )?;
         let current_token_label = monthly_token_label(period);
         tokens.open_label(&current_token_label);
         Ok(Self {
@@ -226,13 +247,20 @@ impl Vtc {
         }
         let pre = {
             let _guard = self.hsk_lock.lock().expect("helper signing lock");
-            self.helper.issue_root(
-                &self.hvk,
-                &self.hsk,
-                &vetter_predicate(&period),
-                id,
-                request,
-                rng,
+            trace::span(
+                "VTC",
+                "PCS::issue_root",
+                "VerifyRootRequest, then BlindIssue: σ̂ = (g_1^u, (g_1^x · C · g_1^{y_2 φ})^u)",
+                || {
+                    self.helper.issue_root(
+                        &self.hvk,
+                        &self.hsk,
+                        &vetter_predicate(&period),
+                        id,
+                        request,
+                        rng,
+                    )
+                },
             )?
         };
         self.bound_ids.insert(member.to_string(), id_text);
@@ -289,7 +317,12 @@ impl Vtc {
                 "{member} is not in event {event}"
             )));
         }
-        self.tokens.issue(member, tick, label, requests, rng)
+        trace::span(
+            "VTC",
+            "TokenIssuer::issue",
+            "verify each PoK of opening, then BlindIssue under tsk, one at a time",
+            || self.tokens.issue(member, tick, label, requests, rng),
+        )
     }
 
     /// Event mode (§5.1): approved by someone outside the group, for a group of at least
@@ -331,11 +364,18 @@ impl Vtc {
     // --- admission --------------------------------------------------------------------------
 
     pub fn challenge<R: RngCore + CryptoRng>(&mut self, rng: &mut R) -> String {
-        let mut b = [0u8; 16];
-        rng.fill_bytes(&mut b);
-        let c: String = b.iter().map(|x| format!("{x:02x}")).collect();
-        self.challenges.insert(c.clone());
-        c
+        trace::span_any(
+            "VTC",
+            "Vtc::challenge",
+            "16 random bytes, remembered until used once",
+            || {
+                let mut b = [0u8; 16];
+                rng.fill_bytes(&mut b);
+                let c: String = b.iter().map(|x| format!("{x:02x}")).collect();
+                self.challenges.insert(c.clone());
+                c
+            },
+        )
     }
 
     /// Verify a submission, spend its tokens, and count. Records are kept per applicant `id`,
@@ -371,9 +411,16 @@ impl Vtc {
             .collect::<Result<_, _>>()?;
         let app_refs: Vec<&[u8]> = apps.iter().map(Vec::as_slice).collect();
         let f = hidden_vetting_predicate(u32::try_from(n).unwrap_or(u32::MAX));
-        self.helper
-            .check_proof_in_context(&self.hvk, &f, &sub.id, &sub.proof, &app_refs, &app0)
-            .map_err(ProtoError::ProofRejected)?;
+        trace::span(
+            "VTC",
+            "PCS::check_proof_in_context",
+            "VerifyProof: subgroup checks, CheckAtts_P, then Verify_FS(ctx_0, π_0)",
+            || {
+                self.helper
+                    .check_proof_in_context(&self.hvk, &f, &sub.id, &sub.proof, &app_refs, &app0)
+            },
+        )
+        .map_err(ProtoError::ProofRejected)?;
 
         // The proof holds: every attestation is from a holder of a live vetter label, the tags
         // are pairwise distinct, and each is bound to its metadata (including its token serial).
@@ -384,10 +431,16 @@ impl Vtc {
             if meta.token_label != spend.label || meta.token_serial != scalar_text(&spend.serial)? {
                 failures.push("token-mismatch".to_string());
                 eligible = false;
-            } else if !self.tokens.signature_ok(spend)? {
+            } else if !trace::span(
+                "VTC",
+                "TokenIssuer::signature_ok",
+                "the token under tvk: a PS signature on (s, φ_token) with a live label",
+                || self.tokens.signature_ok(spend),
+            )? {
                 failures.push("no-token".to_string());
                 eligible = false;
-            } else if self.tokens.record_spend(spend, &id_text, &tag)? == SpendOutcome::DoubleSpend
+            } else if record_spend_traced(&mut self.tokens, spend, &id_text, &tag)?
+                == SpendOutcome::DoubleSpend
             {
                 failures.push("token-double-spend".to_string());
                 eligible = false;
@@ -450,7 +503,12 @@ impl Vtc {
                 f
             })
             .collect();
-        let evaluation = evaluate(&self.requirements, &facts, now);
+        let evaluation = trace::span_any(
+            "VTC",
+            "vetting::requirements::evaluate",
+            "VTI's counting rule (vta-sdk), with the tag where the vetter's DID used to be",
+            || evaluate(&self.requirements, &facts, now),
+        );
         let statements = kept
             .iter()
             .zip(&facts)
@@ -488,12 +546,34 @@ impl Vtc {
     pub fn withdraw(&mut self, id: &G1, tag: &G1, proof: &FSProof<Fr>) -> Result<bool, ProtoError> {
         let s = self.open.tag_point(id)?;
         let ctx = withdraw_context(&self.community, &point_text(id)?);
-        if !verify_tag(self.open.tag(), tag, &s, &ctx, proof) {
+        if !trace::span_bool(
+            "VTC",
+            "kiprf::verify_tag",
+            "verify PoK{ K : T = H_2(s)^K } under the withdrawal context",
+            || verify_tag(self.open.tag(), tag, &s, &ctx, proof),
+        ) {
             return Ok(false);
         }
         self.withdrawn.insert((point_text(id)?, point_text(tag)?));
         Ok(true)
     }
+}
+
+/// [`TokenIssuer::record_spend`], with its outcome noted in the trace (for the web walkthrough).
+fn record_spend_traced(
+    tokens: &mut TokenIssuer,
+    spend: &TokenSpend,
+    id: &str,
+    tag: &str,
+) -> Result<SpendOutcome, ProtoError> {
+    let outcome = trace::span(
+        "VTC",
+        "TokenIssuer::record_spend",
+        "the serial into the label's spent set",
+        || tokens.record_spend(spend, id, tag),
+    )?;
+    trace::note(format!("{outcome:?}"));
+    Ok(outcome)
 }
 
 pub fn withdraw_context(community: &str, id_text: &str) -> Vec<u8> {

@@ -9,6 +9,7 @@ use crate::{
     meta::{ProofContext, StatementMeta, id_binding},
     scheme::{E, G1, hidden_vetting_predicate, point_text, scalar_text},
     token::{TokenParams, verify_spend},
+    trace,
     vetter::HiddenAttestation,
     vtc::{Submission, Vtc},
 };
@@ -26,7 +27,12 @@ impl ApplicantEngine {
         join_did: &str,
         rng: &mut R,
     ) -> Result<Self, ProtoError> {
-        let (id, usk) = vtc.open().user_keygen(rng)?;
+        let (id, usk) = trace::span(
+            join_did,
+            "PCS::user_keygen",
+            "UKeyGen, fresh for this one application: usk ← Z_p*, id = g_1^usk",
+            || vtc.open().user_keygen(rng),
+        )?;
         Ok(Self {
             usk,
             id,
@@ -62,9 +68,16 @@ impl ApplicantEngine {
     /// session and not at submit.
     pub fn receive(&mut self, vtc: &Vtc, att: HiddenAttestation) -> Result<(), ProtoError> {
         let app = att.meta.context_bytes()?;
-        vtc.open()
-            .check_attestation_in_context(vtc.hvk(), &self.id, &att.attestation, &app)
-            .map_err(|e| ProtoError::AttestationRejected(e.to_string()))?;
+        trace::span(
+            &self.join_did,
+            "PCS::check_attestation_in_context",
+            "VerifyAtt: ValidTag, public checks of cred*_j, Verify_FS(ctx_j, π_j) with app_j",
+            || {
+                vtc.open()
+                    .check_attestation_in_context(vtc.hvk(), &self.id, &att.attestation, &app)
+            },
+        )
+        .map_err(|e| ProtoError::AttestationRejected(e.to_string()))?;
         if !vtc.live_vetter_phis()?.contains(&att.attestation.phi) {
             return Err(ProtoError::AttestationRejected(
                 "class is not a live vetter label".into(),
@@ -78,7 +91,12 @@ impl ApplicantEngine {
             ));
         }
         let params = TokenParams::new(&vtc.community)?;
-        if !verify_spend(&params, vtc.tokens.tvk(), &att.token)? {
+        if !trace::span(
+            &self.join_did,
+            "token::verify_spend",
+            "the token under tvk: e(σ'_1, X̃_t Ỹ_1t^s Ỹ_2t^φ_token) = e(σ'_2, g̃)",
+            || verify_spend(&params, vtc.tokens.tvk(), &att.token),
+        )? {
             return Err(ProtoError::AttestationRejected(
                 "token signature does not verify".into(),
             ));
@@ -135,15 +153,22 @@ impl ApplicantEngine {
         }
         .context_bytes()?;
         let f = hidden_vetting_predicate(u32::try_from(atts.len()).unwrap_or(u32::MAX));
-        let (proof, _state) = vtc.open().prove_in_context(
-            vtc.hvk(),
-            &f,
-            &self.id,
-            &self.usk,
-            &atts,
-            &app_refs,
-            &app0,
-            rng,
+        let (proof, _state) = trace::span(
+            &self.join_did,
+            "PCS::prove_in_context",
+            "Prove: CheckAtts_P, then C, T_0 and π_0 under ctx_0 (all app_j and app_0)",
+            || {
+                vtc.open().prove_in_context(
+                    vtc.hvk(),
+                    &f,
+                    &self.id,
+                    &self.usk,
+                    &atts,
+                    &app_refs,
+                    &app0,
+                    rng,
+                )
+            },
         )?;
         Ok(Submission {
             id: self.id,

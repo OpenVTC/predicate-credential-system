@@ -29,6 +29,72 @@ cargo run -p pcs-vetting-prototype --release --example walkthrough
 Enter goes to the next stage, `b` goes back, a number jumps to that stage, and `q` quits.
 `--auto` prints every stage at once.
 
+To present it, run the same walkthrough as a local web page:
+
+```sh
+cargo run -p pcs-vetting-prototype --release --example walkthrough-web
+```
+
+It serves <http://127.0.0.1:8787/> and opens it in the browser. The page has the terminal
+walkthrough's 15 stages, numbered from 0. Step 0 is an overview, where nothing runs: the
+instantiation, a map of every message of the run, and what each step does. Steps 1 to 14 are
+the terminal's stages 2 to 15, and each has the same parts:
+
+- A bar that stays on screen and says where you are: the step and its phase, which action is
+  running, and which engine call it is in.
+- The step's actions, numbered, each by one party: what it computes, what it checks, and what
+  it sends to whom. An action first shows the engine calls it made, one by one, and then its
+  result.
+- The content of every message, as JSON:
+  - the join submission in its wire form;
+  - the VTC's answer in the shape of the join ceremony's `Verdict` (vta-sdk), with its `needs`;
+  - every other message as the in-memory object it is in this prototype, written out by the
+    crate's `serde` layer.
+- The outcome of the step.
+- A panel of where things stand: who holds what, and how far each application is from the
+  policy, including what it is still missing.
+
+With the default seed (7) every value is the one the terminal walkthrough prints, and *New
+randomness* recomputes everything under a random seed. In the formulas, colour gives each
+symbol's group (𝔾₁, 𝔾₂, 𝔾_T, ℤ_p or bytes), and selecting a symbol, a value or a coloured
+string in a message opens its full encoding, who holds it and where else it appears. Secrets
+are hatched; they are shown only because the walkthrough reads them through the engines' demo
+hooks.
+
+The whole run is computed when the page loads. The actions are played one after another so
+that an audience can follow. The pace can be *auto*, *slow*, *one action per key* or *instant*;
+the times shown are the ones measured in the run, recorded by the `trace` hook, and `--release`
+matters for them. Every equation is recomputed and both sides of each pairing equation are
+shown. The *attack lab* runs experiments on request, against the state of step 9 (bob just
+admitted) for the same seed:
+
+- editing a signed statement (the Fiat–Shamir challenge diverges);
+- counting one vetter twice;
+- replaying or transplanting a proof;
+- using another applicant's attestations;
+- shifting a tag by a point of order 3, where the forged proof passes `fiat_shamir::verify` and
+  only the subgroup check stops it;
+- a twin key;
+- the token budget;
+- rotation and an emergency drop of a period;
+- a vetter vouching for a second persona of her own. This one is accepted: the applicant's key
+  is fresh, so `T_0 ∉ {T_j}` does not exclude it.
+
+Keys: → plays the next action, or shows the rest of the step, or goes to the next stage; ← goes
+back; `R` plays a stage again; `P` is presenter mode (larger type, the state below each stage);
+`?` lists the rest. Flags: `--port N`, `--seed N`, `--no-open`, and `--assets demo/web`, which
+serves the page from disk so that it can be edited without a rebuild.
+
+The page is plain HTML, CSS and JavaScript with no build step. It needs no network: KaTeX
+0.17.0 and its fonts are vendored unmodified under `web/vendor/katex` (MIT; provenance and
+SHA-256 sums in `SOURCE.txt`), and its three faces (KaTeX_Main, KaTeX_SansSerif,
+KaTeX_Typewriter) are also the page's text faces. The server uses the standard library only,
+so the workspace lockfile does not change. It listens on 127.0.0.1 and refuses any `Host` but
+its own (DNS rebinding). Every POST must carry `X-PCS-Demo: 1` and a JSON content type, and
+any `Origin` must be the page's own. Pages are served under a Content-Security-Policy that
+allows scripts, styles and fonts from the server only, and data reaches the DOM as text or
+through KaTeX, never as HTML.
+
 It is a workspace member of this repository (`publish = false`) and depends on the
 `predicate-credential-system` crate one directory up.
 
@@ -46,6 +112,12 @@ OpenVTC integration, run locally as above, rather than a gate on every PR.
 | `vtc` | The VTC as PCS *helper*: root issuance behind the grant and the member→id binding, rotation, drip, event mode, submission to VTI `StatementFacts`, and withdrawal |
 | `vetter` | The vetter's PCS engine, which in production lives in the vetter's VTA: a stable `usk`, enrolment, drip, accept/decline, attest, refresh and withdraw |
 | `applicant` | The applicant's PCS engine: a fresh `usk` for each application, verification of attestations on receipt, and the proof |
+| `trace` | Demo hook for the web walkthrough: when a recorder is installed, the engines report each protocol call (who, which algorithm, how long, any error). Otherwise every wrapper is a plain call, and no wrapper draws randomness |
+
+The web walkthrough is `examples/walkthrough-web/`: `scenario.rs` (the stages as flows of
+actions, calling the engines in the terminal walkthrough's order), `lab.rs` (the experiments),
+`model.rs` (the JSON the page renders: values, flows, the ledger of who holds what),
+`server.rs` and `assets.rs`. The page itself is `web/`.
 
 ## What the tests establish
 
