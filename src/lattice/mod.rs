@@ -95,9 +95,9 @@ pub const E_COUNT: usize = M.div_ceil(E_DEG);
 /// `BlindIssue`) that one helper key answers (construction.tex, "Issuance cap"). The helper then
 /// rotates its key.
 pub const Q_MAX: u64 = 1 << 48;
-/// The Jali commit this crate is built and pinned against (`Cargo.toml`). It enters the digest of
-/// the lattice `pp`: Jali promises no stability of its proof encoding or transcripts.
-pub const JALI_REVISION: &str = "0cd24f38bd84e2e48d2dcb63f34d2d17cba2a90d";
+/// The Jali release this crate is built against and pins exactly (`Cargo.toml`). It enters the
+/// digest of the lattice `pp`: Jali promises no stability of its proof encoding or transcripts.
+pub const JALI_VERSION: &str = "0.1.0";
 
 // The constants are consistent with each other and with the layouts the parameter sets were
 // derived for.
@@ -180,11 +180,16 @@ mod tests {
         assert!((M - 1) as f64 * psi.log2() < rhs);
     }
 
-    /// `JALI_REVISION` is the commit that `Cargo.toml` pins.
+    /// `JALI_VERSION` is the release that `Cargo.toml` pins exactly.
     #[test]
-    fn jali_revision_is_the_pinned_commit() {
+    fn jali_version_is_the_pinned_release() {
         let manifest = include_str!("../../Cargo.toml");
-        assert!(manifest.contains(&format!("rev = \"{JALI_REVISION}\"")));
+        let pin = format!("version = \"={JALI_VERSION}\"");
+        assert!(
+            manifest
+                .lines()
+                .any(|line| line.starts_with("jali ") && line.contains(&pin))
+        );
     }
 
     /// One seed per call: consecutive seeds differ.

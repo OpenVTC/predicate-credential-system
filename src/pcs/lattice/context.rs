@@ -28,7 +28,7 @@
 //! * **`pp` leads.** The digest of `pp` is computed once per [`LatticePCS`]. Beyond the label
 //!   (which stands for `EncPred`, `H_0`, `H_1`), `pp_Σ` and $`c_0`$, it covers what Jali's
 //!   verification depends on and the paper's `pp` does not name: Jali's `pp_seed`, the SHA-256
-//!   of the three parameter sets, the Jali revision (Jali promises no stability of its proof
+//!   of the three parameter sets, the Jali version (Jali promises no stability of its proof
 //!   encoding or transcripts) and the placement of `s` in the BDLOP part of `R_att` (recorded
 //!   only in the derivation report of the set). One item fixes the constants of the
 //!   instantiation (`format`).
@@ -51,7 +51,7 @@ use crate::{
     hash::Transcript,
     kiprf::lwr::LWRTag,
     lattice::{
-        BETA_R, BETA_U, BETA_X, BinaryPoly, D, E_BOUND, E_DEG, ELL_R, GAMMA, JALI_REVISION, M, P,
+        BETA_R, BETA_U, BETA_X, BinaryPoly, D, E_BOUND, E_DEG, ELL_R, GAMMA, JALI_VERSION, M, P,
         PROOF_DEGREE, Q, Q_T, Rq, S_BOUND,
         sets::{ATT_SHA256, ISSUE_ROOT_SHA256, ISSUE_SHA256},
     },
@@ -78,7 +78,7 @@ impl PublicParameters {
     /// \lfloor\gamma/2\rfloor, e_{\deg}, \beta_u, \beta_x, \beta_r, \ell_r, \lfloor\beta_s^2\rfloor`$
     /// and the proof degree), `pp-sigma` ($`v \| b_u \| b_\phi \| B_{r,0} \| B_{r,1}`$, 12,800
     /// bytes), `c0` (the 20-bit packing of $`c_0`$, 430,080 bytes), `jali-pp-seed`, `jali-sets`
-    /// (the three SHA-256 pins), `jali` (the revision, ASCII) and `placement`. About 0.3 ms.
+    /// (the three SHA-256 pins), `jali` (the version, ASCII) and `placement`. About 0.3 ms.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
         let mut transcript = Transcript::new(PP_SUFFIX);
@@ -117,7 +117,7 @@ impl PublicParameters {
             b"jali-sets",
             &[ATT_SHA256, ISSUE_SHA256, ISSUE_ROOT_SHA256].concat(),
         );
-        transcript.append_bytes(b"jali", JALI_REVISION.as_bytes());
+        transcript.append_bytes(b"jali", JALI_VERSION.as_bytes());
         transcript.append_bytes(b"placement", PLACEMENT);
         transcript.digest()
     }
@@ -289,7 +289,7 @@ mod tests {
             sets.extend_from_slice(&Sha256::digest(json.as_bytes()));
         }
         item(b"jali-sets", &sets);
-        item(b"jali", b"0cd24f38bd84e2e48d2dcb63f34d2d17cba2a90d");
+        item(b"jali", b"0.1.0");
         item(b"placement", b"R_att:s=bdlop");
         let expected: [u8; 32] = hasher.finalize().into();
         assert_eq!(pp.digest(), expected);
@@ -297,7 +297,7 @@ mod tests {
         // tools/lattice/ref_contexts.py): a change of any item or of the format shows
         assert_eq!(
             hex(&pp.digest()),
-            "72c1d94fc0f63645ba250d0ddf9577d656d6624e794e174af05dd4093e4b9515"
+            "40b9933cf7bb48f1cb8dcbdc492bbb45cb27a278a59a8d6cbf5219524e79d212"
         );
         // another label, another digest
         assert_ne!(
@@ -332,7 +332,7 @@ mod tests {
         };
         assert_eq!(
             hex(&pcs.attestation_context(&hvk, &id, &phi, &t)),
-            "b91ef50e4f5141bf975a3b968a64d207fd0bb107879674423ba6512645865adc"
+            "2c078f11211b7cc3b4f4283f6bbfffbdf4d150403e49e8da36fcc4defbaacf19"
         );
         assert_eq!(
             hex(&pcs.issuance_context(
@@ -343,11 +343,11 @@ mod tests {
                 &t0,
                 &[attestation]
             )),
-            "77502dd288188c7026193e009c0d45827cf6063fccbb1d5d81bca41043b8610d"
+            "597326b6be1480a7f77bb61ef42d9eddcfdf2cab00dfd6c284ebd2e318b7f57b"
         );
         assert_eq!(
             hex(&pcs.root_context(&hvk, &Predicate::root("founders"), &id, &c, &t0)),
-            "93912252e35514603d2542daeb40afacb6e02581e8f1f7a7cb51bf37265dd1d7"
+            "f6da9aba16c8ac062ccd479be14281ecfa765c0d9c10719aa6cbed12698cfcf1"
         );
     }
 

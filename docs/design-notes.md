@@ -205,7 +205,7 @@ as `pcs::lattice::LatticePCS`, which implements `PredicateCredentialSystem`.
 * **Contexts.** SHA-256 transcripts of the paper's tuples `ctx_j`, `ctx_0`, `ctx_root` under
   three oracle suffixes, led by a digest of `pp` that also covers what Jali's verification
   depends on and the paper's `pp` does not name: Jali's `pp_seed` (derived from the label, never
-  chosen by the helper), the parameter-set digests, the Jali revision and the placement of `s`.
+  chosen by the helper), the parameter-set digests, the Jali version and the placement of `s`.
 * **Caches.** The parameter sets, the rings, `pp_Σ` as Jali polynomials and the rows of `c_0`
   are built once per `LatticePCS`; `s_i = H_0(⟨id_i⟩)` and its rows once per call. Statement
   building, `H_0` and the rows of a tag matrix cost 8-17 ms per proof, against seconds in Jali; compiled statements
@@ -240,8 +240,8 @@ as `pcs::lattice::LatticePCS`, which implements `PredicateCredentialSystem`.
 * **Platforms**: only aarch64 (Apple M4) was measured. `SampPre` computes in floating point, so
   the exact preimages may differ across platforms (their validity is checked exactly before
   release); the tests assert proof lengths within a band, not exactly.
-* **CI**: Jali and `ntru-trapdoor` (https://github.com/etairi/ntru-trapdoor) are git
-  dependencies pinned by revision, so a checkout of this repository alone resolves every
-  dependency, as in `.github/workflows/pcs.yml`. Until 2026-10-04 `ntru-trapdoor` was a path
+* **CI**: every dependency comes from crates.io, Jali and `ntru-trapdoor` included (pinned to one
+  release each), so a checkout of this repository alone builds, as in `.github/workflows/ci.yml`,
+  whose `package` job packages the crate. Until 2026-10-04 `ntru-trapdoor` was a path
   dependency (`../ntru-trapdoor`), and without that sibling checkout every command that resolves
   dependencies failed, whatever the features.

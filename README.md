@@ -11,7 +11,7 @@ credentialed users, none of whom is the user itself. Built on [arkworks](https:/
 The standalone [Jali library](https://github.com/etairi/jali) implements lattice-based
 zero-knowledge proofs, currently the LNP22 proof stack described in the
 [Rust port plan](./docs/lnp22-rust-port-plan.md). It lives in its own repository; this crate
-depends on it as a git dependency (feature `jali`), and its post-quantum instantiation (feature
+depends on its crates.io release (feature `jali`), and its post-quantum instantiation (feature
 `lattice`) proves its relations with it. See Jali's README for its status and limits.
 
 ## Overview
@@ -91,7 +91,7 @@ instantiation, the SNARK-based variant and straight-line extractable proof compi
 | `print-trace` | no | Nested timings from `ark_std`. |
 | `test-utils` | no | Test helpers, including an INSECURE hash-to-group oracle. Never enable in a deployment. |
 | `jali` | no | Re-exports [Jali](https://github.com/etairi/jali), the standalone lattice zero-knowledge library, as `predicate_credential_system::jali`. It is the proof backend of the lattice instantiation. |
-| `lattice` | no | The post-quantum instantiation: `cred::VSIS`, `kiprf::LWR`, the module `lattice` and `pcs::lattice::LatticePCS` (re-exported as `LatticePCS`). Enables `jali` (with Jali's `serde`, which loads the embedded parameter sets), `ntru-trapdoor` and `shake`. Jali and `ntru-trapdoor` are git dependencies pinned by revision. |
+| `lattice` | no | The post-quantum instantiation: `cred::VSIS`, `kiprf::LWR`, the module `lattice` and `pcs::lattice::LatticePCS` (re-exported as `LatticePCS`). Enables `jali` (with Jali's `serde`, which loads the embedded parameter sets), `ntru-trapdoor` and `shake`. Jali and `ntru-trapdoor` come from crates.io, pinned to one release each (`=0.1.0`, `=0.1.1`). |
 
 ## Usage
 

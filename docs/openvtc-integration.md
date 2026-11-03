@@ -49,7 +49,9 @@ counting and self-exclusion are what the tags provide.
 
 - **Source.** OpenVTC's `deny.toml` denies git dependencies and registries other than crates.io.
   The crate must be published to crates.io, or vendored as a workspace member. (Verified. The
-  name `predicate-credential-system` was free on crates.io on 2026-09-19.)
+  name `predicate-credential-system` was free on crates.io on 2026-09-19.) Its optional
+  dependencies Jali 0.1.0 and `ntru-trapdoor` 0.1.1 (feature `lattice`) come from crates.io too,
+  so `cargo package` accepts the manifest. (Verified.)
 - **Licence.** This crate is MIT, which is on their allow-list for dependencies. Vendoring the
   sources into the Apache-2.0 workspace is a separate decision.
 - **Toolchain.** Edition 2024 and `rust-version = "1.95.0"` on both sides. (Verified.)

@@ -137,7 +137,7 @@ SHA-256 transcripts of the framing above. The context handed to Jali is the 32-b
 
 | digest | suffix | items, in order |
 |---|---|---|
-| `pp` | `/LATTICE-PP-DIGEST` | `label` (`L`); `format` (15 × LE64: 1, `d` = 1024, `q`, `γ` = 15, `p` = 65,536, `q_t`, `m` = 168, `⌊γ/2⌋` = 7, `e_deg` = 128, `β_u` = `β_x` = `β_r` = 1, `ℓ_r` = 2, `⌊β_s²⌋` = 90,803,788,942, proof degree 128); `pp-sigma` (`v ‖ b_u ‖ b_φ ‖ B_{r,0} ‖ B_{r,1}`, 12,800 B); `c0` (430,080 B); `jali-pp-seed`; `jali-sets` (the SHA-256 of the `att`, `issue` and `issue-root` parameter files); `jali` (the Jali revision, 40 ASCII hex digits); `placement` (`R_att:s=bdlop`) |
+| `pp` | `/LATTICE-PP-DIGEST` | `label` (`L`); `format` (15 × LE64: 1, `d` = 1024, `q`, `γ` = 15, `p` = 65,536, `q_t`, `m` = 168, `⌊γ/2⌋` = 7, `e_deg` = 128, `β_u` = `β_x` = `β_r` = 1, `ℓ_r` = 2, `⌊β_s²⌋` = 90,803,788,942, proof degree 128); `pp-sigma` (`v ‖ b_u ‖ b_φ ‖ B_{r,0} ‖ B_{r,1}`, 12,800 B); `c0` (430,080 B); `jali-pp-seed`; `jali-sets` (the SHA-256 of the `att`, `issue` and `issue-root` parameter files); `jali` (the Jali version, `0.1.0`, ASCII); `placement` (`R_att:s=bdlop`) |
 | `ctx_j` | `/LATTICE-CTX-ATT` | `pp` (the digest), `hvk`, `id`, `phi`, `T` (`id_{j→i}`), `cred*` (empty) |
 | `ctx_0` | `/LATTICE-CTX-ISSUE` | `pp`, `hvk`, `f` (`⟨f_k⟩`), `id`, `C`, `T0`, then one `att` per attestation (its encoding above), in order |
 | `ctx_root` | `/LATTICE-CTX-ROOT` | `pp`, `hvk`, `f` (`⟨f_root⟩`), `id`, `C`, `T0` |
@@ -163,10 +163,10 @@ Python references (hashlib; `tools/lattice/ref_oracles.py`, `ref_tag.py` and `re
 | Jali's `pp_seed` | `2f7422b974aa61558962998657ba3c3a92e47a919c5def8f057821d7c701d01a` |
 | `c_0`: first four entries, last entry, sum mod 2^32 | 482358, 65488, 336476, 223542; 343167; 2804724483 |
 | `EncPred(Predicate::new(5, "members"))`, first 16 bytes | `80602108a32f61e5cdc04e78eb3ba344` |
-| digest of `pp` | `72c1d94fc0f63645ba250d0ddf9577d656d6624e794e174af05dd4093e4b9515` |
-| `ctx_j` for `hvk` = (5, …, 5), `id` = bytes 0..255 then 80 zero bytes, `φ` = 128 × `5a`, `T` = 336 × `11` | `b91ef50e4f5141bf975a3b968a64d207fd0bb107879674423ba6512645865adc` |
-| `ctx_0` for the same `hvk`, `id`, `f = (2, "members")`, `C` = (7, …, 7), `T_0` = 336 × `22`, one attestation (`T`, `φ`, proof `010203`) | `77502dd288188c7026193e009c0d45827cf6063fccbb1d5d81bca41043b8610d` |
-| `ctx_root` for the same `hvk`, `id`, `C`, `T_0` and `f_root = (0, "founders")` | `93912252e35514603d2542daeb40afacb6e02581e8f1f7a7cb51bf37265dd1d7` |
+| digest of `pp` | `40b9933cf7bb48f1cb8dcbdc492bbb45cb27a278a59a8d6cbf5219524e79d212` |
+| `ctx_j` for `hvk` = (5, …, 5), `id` = bytes 0..255 then 80 zero bytes, `φ` = 128 × `5a`, `T` = 336 × `11` | `2c078f11211b7cc3b4f4283f6bbfffbdf4d150403e49e8da36fcc4defbaacf19` |
+| `ctx_0` for the same `hvk`, `id`, `f = (2, "members")`, `C` = (7, …, 7), `T_0` = 336 × `22`, one attestation (`T`, `φ`, proof `010203`) | `597326b6be1480a7f77bb61ef42d9eddcfdf2cab00dfd6c284ebd2e318b7f57b` |
+| `ctx_root` for the same `hvk`, `id`, `C`, `T_0` and `f_root = (0, "founders")` | `f6da9aba16c8ac062ccd479be14281ecfa765c0d9c10719aa6cbed12698cfcf1` |
 
 No JSON forms exist for the lattice objects: base58btc is quadratic in the length, and an
 issuance proof at `k = 5` has about 462 KB.

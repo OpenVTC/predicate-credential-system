@@ -17,7 +17,7 @@ sys.path.insert(0, HERE)
 import ref_oracles as ro  # noqa: E402
 
 PCS = os.path.normpath(os.path.join(HERE, "..", ".."))
-JALI_REVISION = b"0cd24f38bd84e2e48d2dcb63f34d2d17cba2a90d"
+JALI_VERSION = b"0.1.0"
 
 
 def frame(label: bytes, data: bytes) -> bytes:
@@ -64,7 +64,7 @@ def pp_digest(deployment: bytes) -> bytes:
             (b"c0", c0),
             (b"jali-pp-seed", ro.jali_pp_seed(deployment)),
             (b"jali-sets", sets),
-            (b"jali", JALI_REVISION),
+            (b"jali", JALI_VERSION),
             (b"placement", b"R_att:s=bdlop"),
         ],
     )

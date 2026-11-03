@@ -42,15 +42,15 @@ thiserror     = "2"
 serde         = { version = "1", optional = true, default-features = false, features = ["derive", "std"] }
 multibase     = { version = "0.9", optional = true }
 # Optional (feature `jali`): Jali, the standalone lattice zero-knowledge library
-# (https://github.com/etairi/jali), the proof backend of the lattice instantiation (feature
-# `lattice`). Re-exported as `predicate_credential_system::jali`. Pinned to a commit until Jali is
-# published on crates.io; `lattice::JALI_REVISION` repeats the commit and enters the digest of the
-# lattice `pp` (a unit test keeps the two equal).
-jali          = { git = "https://github.com/etairi/jali", rev = "0cd24f38bd84e2e48d2dcb63f34d2d17cba2a90d", optional = true }
+# (https://crates.io/crates/jali), the proof backend of the lattice instantiation (feature
+# `lattice`). Re-exported as `predicate_credential_system::jali`. Pinned to one release:
+# `lattice::JALI_VERSION` repeats it and enters the digest of the lattice `pp` (a unit test keeps
+# the two equal).
+jali          = { version = "=0.1.0", optional = true }
 # Optional (feature `lattice`): NTRU trapdoors (TrapGen, SampPre at arbitrary targets, exact
-# arithmetic in R_q for q = 5 mod 8) for the credential base Σ-vSIS. Not on crates.io yet: a git
-# dependency pinned by revision, as for Jali.
-ntru-trapdoor = { git = "https://github.com/etairi/ntru-trapdoor", rev = "1669474e56c1b759869bbc34d2db40b295a184a0", optional = true }
+# arithmetic in R_q for q = 5 mod 8) for the credential base Σ-vSIS
+# (https://crates.io/crates/ntru-trapdoor). Pinned to one release, as Jali is.
+ntru-trapdoor = { version = "=0.1.1", optional = true }
 # Optional (feature `lattice`): SHAKE128 for the random oracles of the lattice instantiation
 # (H_mat, EncPred, the expansion of pp). RustCrypto's `shake`, already in Cargo.lock as a
 # dependency of Jali (same version, no new crate): Jali exposes only a fixed-format SHAKE128 stream
