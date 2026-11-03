@@ -22,6 +22,7 @@ pub mod error;
 pub mod meta;
 pub mod scheme;
 pub mod token;
+pub mod trace;
 pub mod vetter;
 pub mod vtc;
 
