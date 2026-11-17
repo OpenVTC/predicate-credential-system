@@ -17,7 +17,7 @@ use crate::{
     meta::StatementMeta,
     scheme::{Bk, Fr, G1, point_text, scalar_text},
     token::{Reservation, TokenSpend, TokenWallet},
-    vtc::{Vtc, withdraw_context},
+    vtc::{Vtc, enrolment_ssid, withdraw_context},
 };
 
 /// An attestation as the applicant receives it (`vetting/attestation/0.1`).
@@ -33,10 +33,9 @@ pub struct HiddenAttestation {
     pub token: TokenSpend,
 }
 
-/// What a vetter holds for one period: its key for the period, the user it is under the
-/// period's helper key, and its root credential.
+/// What a vetter holds for one period: the user it is under the period's helper key (which
+/// holds, and wipes on drop, its key for the period), and its root credential.
 struct Enrolment {
-    usk: Fr,
     user: User<Bk>,
     cred: Credential<Bk>,
 }
@@ -56,16 +55,6 @@ pub struct VetterEngine {
     pub personal_limit: Option<usize>,
     attested: usize,
     log: Vec<Logged>,
-}
-
-/// The `ssid` of a root request: the community, the member and the period.
-fn enrolment_ssid(community: &str, member: &str, period: &str) -> Vec<u8> {
-    let mut ssid = b"openvtc/hidden-vetting/enrol/0.1\0".to_vec();
-    for part in [community, member, period] {
-        ssid.extend((part.len() as u64).to_le_bytes());
-        ssid.extend(part.as_bytes());
-    }
-    ssid
 }
 
 impl VetterEngine {
@@ -107,10 +96,9 @@ impl VetterEngine {
         let (message, state) =
             vtc.pcreds()
                 .request_credential(&hvk, &user, Vec::new(), &ssid, rng)?;
-        let pre = vtc.issue_vetter_root(&self.member, &period, &message, &ssid, rng)?;
+        let pre = vtc.issue_vetter_root(&self.member, &period, &message, rng)?;
         let cred = vtc.pcreds().unblind(&hvk, &user, &pre, state)?;
-        self.enrolments
-            .insert(period, Enrolment { usk, user, cred });
+        self.enrolments.insert(period, Enrolment { user, cred });
         Ok(())
     }
 
@@ -175,8 +163,9 @@ impl VetterEngine {
     }
 
     /// Attest for the applicant of `request` after the human check: check its `π_id` under the
-    /// applicant's period, spend the reserved token, bind its serial and the statement metadata
-    /// into the attestation's context, and attest with this vetter's credential of that period.
+    /// applicant's period, bind the reserved token's serial and the statement metadata into
+    /// the attestation's context, attest with this vetter's credential of that period, and only
+    /// then spend the token, so that a failed attestation leaves it reserved, not lost.
     pub fn attest<R: RngCore + CryptoRng>(
         &mut self,
         vtc: &Vtc,
@@ -186,8 +175,17 @@ impl VetterEngine {
         rng: &mut R,
     ) -> Result<HiddenAttestation, ProtoError> {
         let pending = self.receive(vtc, request)?;
+        let (attestation, meta) = self.sign(
+            vtc,
+            request,
+            pending,
+            &reservation.label,
+            &reservation.serial,
+            meta,
+            rng,
+        )?;
         let token = self.wallet.spend(reservation, rng)?;
-        self.answer(vtc, request, pending, token, meta, rng)
+        Ok(self.record(request, attestation, meta, token))
     }
 
     /// ADVERSARY HOOK for tests: attest with a token of the caller's choosing, e.g. one already
@@ -202,7 +200,16 @@ impl VetterEngine {
         rng: &mut R,
     ) -> Result<HiddenAttestation, ProtoError> {
         let pending = self.receive(vtc, request)?;
-        self.answer(vtc, request, pending, token, meta, rng)
+        let (attestation, meta) = self.sign(
+            vtc,
+            request,
+            pending,
+            &token.label,
+            &token.serial,
+            meta,
+            rng,
+        )?;
+        Ok(self.record(request, attestation, meta, token))
     }
 
     /// The credential of a live period.
@@ -229,17 +236,21 @@ impl VetterEngine {
         )?)
     }
 
-    fn answer<R: RngCore + CryptoRng>(
-        &mut self,
+    /// The attestation, bound to `meta` completed with the token's label and serial. Fallible,
+    /// and touches no state.
+    #[allow(clippy::too_many_arguments)]
+    fn sign<R: RngCore + CryptoRng>(
+        &self,
         vtc: &Vtc,
         request: &VettingRequest,
         pending: PendingAttestation<Bk>,
-        token: TokenSpend,
+        token_label: &str,
+        token_serial: &Fr,
         mut meta: StatementMeta,
         rng: &mut R,
-    ) -> Result<HiddenAttestation, ProtoError> {
-        meta.token_label = token.label.clone();
-        meta.token_serial = scalar_text(&token.serial)?;
+    ) -> Result<(Attestation<Bk>, StatementMeta), ProtoError> {
+        meta.token_label = token_label.to_string();
+        meta.token_serial = scalar_text(token_serial)?;
         let app = meta.context_bytes()?;
         let enrolment = self.enrolment(vtc, &request.period)?;
         let attestation = vtc.pcreds().attest_in_context(
@@ -250,18 +261,29 @@ impl VetterEngine {
             &app,
             rng,
         )?;
+        Ok((attestation, meta))
+    }
+
+    /// Infallible: count and log a signed attestation.
+    fn record(
+        &mut self,
+        request: &VettingRequest,
+        attestation: Attestation<Bk>,
+        meta: StatementMeta,
+        token: TokenSpend,
+    ) -> HiddenAttestation {
         self.attested += 1;
         self.log.push(Logged {
             session: request.ssid.clone(),
             meta: meta.clone(),
         });
-        Ok(HiddenAttestation {
+        HiddenAttestation {
             period: request.period.clone(),
             session: request.ssid.clone(),
             attestation,
             meta,
             token,
-        })
+        }
     }
 
     /// Refresh: the statement this vetter made in the session `session`, attested again for a
@@ -292,6 +314,8 @@ impl VetterEngine {
                 Ok(att)
             }
             Err(e) => {
+                // `attest` spends the token only once the attestation is made, so it is still
+                // reserved here and goes back to the free pool.
                 self.wallet.release(&reservation);
                 Err(e)
             }
@@ -312,10 +336,11 @@ impl VetterEngine {
         let hvk = vtc.hvk(period)?;
         let params = vtc.pcreds().params();
         let xq = vtc.pcreds().recipient_point(hvk.vk(), applicant_id)?;
-        let tag =
-            <Bk as Backend>::tag(params, &enrolment.usk, &xq).ok_or(PcsError::UndefinedTag)?;
+        let tag = <Bk as Backend>::tag(params, enrolment.user.expose_key(), &xq)
+            .ok_or(PcsError::UndefinedTag)?;
         let ctx = withdraw_context(&vtc.community, period, &point_text(applicant_id)?);
-        let proof = <Bk as Backend>::prove_tag(params, &tag, &xq, &enrolment.usk, &ctx, rng)?;
+        let proof =
+            <Bk as Backend>::prove_tag(params, &tag, &xq, enrolment.user.expose_key(), &ctx, rng)?;
         Ok((tag, proof))
     }
 }

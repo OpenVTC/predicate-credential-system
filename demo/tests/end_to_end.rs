@@ -636,3 +636,120 @@ fn event_mode_needs_a_group_an_outside_approver_and_dies_after_the_event() {
             .all(|s| s.failures.contains(&"no-token".to_string()))
     );
 }
+
+// --- review fixes (PR #5) ------------------------------------------------------------------
+
+#[test]
+fn a_root_request_is_bound_to_the_member_that_submits_it() {
+    use pcs_vetting_prototype::vtc::enrolment_ssid;
+    let mut w = world(20, 0);
+    w.vtc.grant("member-a");
+    w.vtc.grant("member-b");
+    // Member A's root request, captured by member B and submitted as B's.
+    let period = w.vtc.current_period().to_string();
+    let hvk = w.vtc.hvk(&period).unwrap().clone();
+    let user = w.vtc.pcreds().register(&hvk, &mut w.rng).unwrap();
+    let ssid = enrolment_ssid(COMMUNITY, "member-a", &period);
+    let (message, _) = w
+        .vtc
+        .pcreds()
+        .request_credential(&hvk, &user, Vec::new(), &ssid, &mut w.rng)
+        .unwrap();
+    assert!(
+        w.vtc
+            .issue_vetter_root("member-b", &period, &message, &mut w.rng)
+            .is_err()
+    );
+    // A is not locked out, and B can still enrol for itself.
+    VetterEngine::new("member-a")
+        .enroll(&mut w.vtc, &mut w.rng)
+        .unwrap();
+    VetterEngine::new("member-b")
+        .enroll(&mut w.vtc, &mut w.rng)
+        .unwrap();
+}
+
+#[test]
+fn rotate_refuses_a_live_period_name() {
+    let mut w = world(21, 0);
+    assert_eq!(
+        w.vtc.rotate("2026-09", &mut w.rng).err(),
+        Some(ProtoError::PeriodExists("2026-09".into()))
+    );
+    w.vtc.rotate("2026-10", &mut w.rng).unwrap();
+    assert_eq!(
+        w.vtc.rotate("2026-09", &mut w.rng).err(),
+        Some(ProtoError::PeriodExists("2026-09".into()))
+    );
+    assert_eq!(w.vtc.live_periods(), vec!["2026-10", "2026-09"]);
+}
+
+#[test]
+fn a_request_over_the_attestation_limit_is_refused_before_verification() {
+    use pcs_vetting_prototype::vtc::MAX_ATTESTATIONS;
+    let mut w = world(22, 1);
+    let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    let a = vet(&mut w, 0, &bob, VettingMethod::InPerson);
+    bob.receive(&w.vtc, a.clone()).unwrap();
+    let many: Vec<&HiddenAttestation> = std::iter::repeat_n(&a, MAX_ATTESTATIONS + 1).collect();
+    let c = w.vtc.challenge(&mut w.rng);
+    let sub = bob
+        .submit_attestations(&w.vtc, &c, &many, &mut w.rng)
+        .unwrap();
+    assert_eq!(
+        w.vtc.submit(&sub, now()).err(),
+        Some(ProtoError::TooManyAttestations {
+            count: MAX_ATTESTATIONS + 1,
+            max: MAX_ATTESTATIONS,
+        })
+    );
+}
+
+#[test]
+fn an_ineligible_statement_does_not_burn_its_token() {
+    let mut w = world(23, 2);
+    let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    // An expired statement: verified, but not eligible.
+    let mut m = meta(&bob, &w.vtc, VettingMethod::InPerson);
+    m.valid_until = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+    let request = bob.vetting_request(&w.vtc, "member-0", &mut w.rng).unwrap();
+    let r = w.vetters[0].accept(None, 2).unwrap();
+    let expired = w.vetters[0]
+        .attest(&w.vtc, &r, &request, m, &mut w.rng)
+        .unwrap();
+    let token = expired.token.clone();
+    bob.receive(&w.vtc, expired).unwrap();
+    let d = submit(&mut w, &bob).unwrap();
+    assert!(d.statements[0].failures.contains(&"expired".to_string()));
+    assert!(!d.statements[0].eligible);
+
+    // The corrected statement on the same token counts, and the VTC logs no anomaly.
+    let mut carol = ApplicantEngine::new(&w.vtc, "did:example:carol", &mut w.rng).unwrap();
+    let m = meta(&carol, &w.vtc, VettingMethod::InPerson);
+    let request = carol
+        .vetting_request(&w.vtc, "member-0", &mut w.rng)
+        .unwrap();
+    let corrected = w.vetters[0]
+        .attest_with_token(&w.vtc, token, &request, m, &mut w.rng)
+        .unwrap();
+    carol.receive(&w.vtc, corrected).unwrap();
+    let d = submit(&mut w, &carol).unwrap();
+    assert!(d.statements[0].eligible, "{:?}", d.statements[0].failures);
+    assert!(w.vtc.tokens.anomalies.is_empty());
+}
+
+#[test]
+fn a_failed_replacement_keeps_the_old_attestation() {
+    let mut w = world(24, 1);
+    let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    let first = vet(&mut w, 0, &bob, VettingMethod::Video);
+    bob.receive(&w.vtc, first).unwrap();
+    // A refresh whose metadata no longer matches what was attested fails verification.
+    let mut bad = vet(&mut w, 0, &bob, VettingMethod::InPerson);
+    bad.meta.method = VettingMethod::Video;
+    assert!(matches!(
+        bob.replace(&w.vtc, bad),
+        Err(ProtoError::AttestationRejected(_))
+    ));
+    assert_eq!(bob.held(), 1);
+}

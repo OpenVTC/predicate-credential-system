@@ -69,7 +69,7 @@ jobs:
       - run: cargo test -p predicate-credential-system --features lattice-plain
 
   # `default = []`, so this is the only job that ever builds the library with
-  # no features at all; the dev-dependency on itself (test-utils + serde)
+  # no features at all; the dev-dependency on itself (test-utils, serde, jali and lattice)
   # means the test targets always pull those in regardless of this flag. Scoped to the library:
   # `demo/` has no features of its own.
   no-default-features:

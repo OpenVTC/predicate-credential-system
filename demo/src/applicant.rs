@@ -97,6 +97,13 @@ impl ApplicantEngine {
     /// Check an attestation on receipt, so that `no-token` or a bad attestation shows up at the
     /// session and not at submit.
     pub fn receive(&mut self, vtc: &Vtc, att: HiddenAttestation) -> Result<(), ProtoError> {
+        self.check(vtc, &att)?;
+        self.held.push(att);
+        Ok(())
+    }
+
+    /// Every check [`Self::receive`] makes, with no change to what is held.
+    fn check(&self, vtc: &Vtc, att: &HiddenAttestation) -> Result<(), ProtoError> {
         if att.period != self.period {
             return Err(ProtoError::AttestationRejected(format!(
                 "made under period {}, not this application's {}",
@@ -126,15 +133,17 @@ impl ApplicantEngine {
                 "token signature does not verify".into(),
             ));
         }
-        self.held.push(att);
         Ok(())
     }
 
-    /// Replace what a vetter vetted again: same tag, newer attestation.
+    /// Replace what a vetter vetted again: same tag, newer attestation. The new one is checked
+    /// first, so that one that fails leaves the old one held.
     pub fn replace(&mut self, vtc: &Vtc, att: HiddenAttestation) -> Result<(), ProtoError> {
+        self.check(vtc, &att)?;
         let tag = att.attestation.tag;
         self.held.retain(|h| h.attestation.tag != tag);
-        self.receive(vtc, att)
+        self.held.push(att);
+        Ok(())
     }
 
     /// Build the submission from every held attestation that is still usable, that is whose

@@ -109,6 +109,23 @@ impl Period {
     }
 }
 
+/// The most attestations [`Vtc::submit`] verifies in one request. Every attestation costs a
+/// pairing check, so a request is refused above this before any is verified. The helper's own
+/// `Policy::with_max_attestations` cannot carry it, since the period policy's `k` is
+/// `usize::MAX` (see [`Period::new`]).
+pub const MAX_ATTESTATIONS: usize = 64;
+
+/// The `ssid` of a root request: the community, the member and the period. The VTC rebuilds it
+/// for the member that submits, so that a root request is bound to that member.
+pub fn enrolment_ssid(community: &str, member: &str, period: &str) -> Vec<u8> {
+    let mut ssid = b"openvtc/hidden-vetting/enrol/0.1\0".to_vec();
+    for part in [community, member, period] {
+        ssid.extend((part.len() as u64).to_le_bytes());
+        ssid.extend(part.as_bytes());
+    }
+    ssid
+}
+
 pub struct Vtc {
     pub community: String,
     audience: String,
@@ -218,13 +235,13 @@ impl Vtc {
 
     /// Root admission under the CURRENT period, behind the grant check (§3, §13 C3): one
     /// credential per member and period. `message` is the member's credential request with no
-    /// attestations, under the session `ssid`.
+    /// attestations, under the session [`enrolment_ssid`] of `member`, which the VTC rebuilds
+    /// rather than takes from the caller: a request replayed by another member fails `π_iss`.
     pub fn issue_vetter_root<R: RngCore + CryptoRng>(
         &mut self,
         member: &str,
         period: &str,
         message: &CredentialRequest<Bk>,
-        ssid: &[u8],
         rng: &mut R,
     ) -> Result<<Bk as Backend>::PreCredential, ProtoError> {
         if !self.grants.contains(member) {
@@ -237,13 +254,14 @@ impl Vtc {
             member: member.to_string(),
             period: period.to_string(),
         };
+        let ssid = enrolment_ssid(&self.community, member, period);
         let current = &mut self.periods[0];
         if current.enrolled.contains_key(member) {
             return Err(already());
         }
         let evaluated = self
             .pcreds
-            .evaluate_request(&current.helper, message, ssid)?;
+            .evaluate_request(&current.helper, message, &ssid)?;
         let id_text = point_text(evaluated.id())?;
         let reply = {
             let _guard = current.lock.lock().expect("helper signing lock");
@@ -269,6 +287,9 @@ impl Vtc {
         new_period: &str,
         rng: &mut R,
     ) -> Result<(), ProtoError> {
+        if self.is_live(new_period) {
+            return Err(ProtoError::PeriodExists(new_period.to_string()));
+        }
         let previous = self.current_period().to_string();
         let fresh = Period::new(&self.pcreds, new_period, rng)?;
         self.periods.truncate(1);
@@ -376,6 +397,12 @@ impl Vtc {
             return Err(ProtoError::BadChallenge);
         }
         let attestations = &sub.request.attestations;
+        if attestations.len() > MAX_ATTESTATIONS {
+            return Err(ProtoError::TooManyAttestations {
+                count: attestations.len(),
+                max: MAX_ATTESTATIONS,
+            });
+        }
         if sub.statements.len() != attestations.len() {
             return Err(ProtoError::CountMismatch {
                 statements: sub.statements.len(),
@@ -434,9 +461,19 @@ impl Vtc {
         for ((meta, spend), tag) in sub.statements.iter().zip(tags) {
             let verified = valid.contains(&tag);
             let mut failures = Vec::new();
-            let mut eligible = verified;
+            // The checks that need no token come first, so that a statement already ineligible
+            // for them does not burn its token in the spent set.
+            if meta.requirements_digest != self.requirements_digest {
+                failures.push("requirements-digest-mismatch".to_string());
+            }
+            if now.date_naive() > meta.valid_until {
+                failures.push("expired".to_string());
+            }
+            let mut eligible = verified && failures.is_empty();
             if !verified {
                 failures.push("unverified".to_string());
+            } else if !eligible {
+                // Not spent: see above.
             } else if meta.token_label != spend.label
                 || meta.token_serial != scalar_text(&spend.serial)?
             {
@@ -448,14 +485,6 @@ impl Vtc {
             } else if self.tokens.record_spend(spend, &id_text, &tag)? == SpendOutcome::DoubleSpend
             {
                 failures.push("token-double-spend".to_string());
-                eligible = false;
-            }
-            if meta.requirements_digest != self.requirements_digest {
-                failures.push("requirements-digest-mismatch".to_string());
-                eligible = false;
-            }
-            if now.date_naive() > meta.valid_until {
-                failures.push("expired".to_string());
                 eligible = false;
             }
             let facts = StatementFacts {

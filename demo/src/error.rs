@@ -14,6 +14,10 @@ pub enum ProtoError {
     PeriodNotLive(String),
     #[error("vetter period {0} is not the current one")]
     NotCurrentPeriod(String),
+    #[error("vetter period {0} is already live")]
+    PeriodExists(String),
+    #[error("the request carries {count} attestations, more than the limit of {max}")]
+    TooManyAttestations { count: usize, max: usize },
     #[error("vetter period {0} is the current one: rotate before dropping it")]
     DropsCurrentPeriod(String),
     #[error("member {member} already holds a credential under period {period}")]
