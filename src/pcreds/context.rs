@@ -156,14 +156,17 @@ impl<Bk: Backend> Protocol<Bk> {
     }
 
     /// The context `(ssid, att⃗)` of `π_iss` extended by application contexts (implementation
-    /// note for OpenVTC, not in the paper): after the attestations, the context `app_j` of each
-    /// attestation in order, each as an item `att-app`, and then the request's own context
-    /// `app` (such as an audience), as an item `app`.
+    /// note for OpenVTC, not in the paper): after the attestations, an item `att-apps` holding
+    /// their number, the context `app_j` of each attestation in order, each as an item
+    /// `att-app`, and then the request's own context `app` (such as an audience), as an item
+    /// `app`.
     ///
     /// `att_apps` binds `π_iss` to the contexts under which the helper checks the attestations,
     /// so that a requester cannot have an attestation checked under one context and prove under
     /// another. It holds one context per attestation. `None` for both gives exactly
-    /// [`Self::issuance_context`].
+    /// [`Self::issuance_context`]. As with `app`, `Some` is distinct from `None` whatever it
+    /// holds: the `att-apps` item is appended for `Some`, also with no attestations, so a
+    /// `π_iss` proved without application contexts never verifies under the context API.
     ///
     /// # Errors
     /// [`Error::LengthMismatch`] if `att_apps` does not hold one context per attestation, and
@@ -191,8 +194,11 @@ impl<Bk: Backend> Protocol<Bk> {
         for attestation in attestations {
             transcript.append_serializable(b"att", attestation)?;
         }
-        for att_app in att_apps.unwrap_or_default() {
-            transcript.append_bytes(b"att-app", att_app);
+        if let Some(apps) = att_apps {
+            transcript.append_u64(b"att-apps", apps.len() as u64);
+            for att_app in apps {
+                transcript.append_bytes(b"att-app", att_app);
+            }
         }
         if let Some(app) = app {
             transcript.append_bytes(b"app", app);

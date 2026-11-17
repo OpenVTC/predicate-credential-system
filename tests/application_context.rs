@@ -459,7 +459,23 @@ fn backward_compatible<B: Base<E>, T: ProtocolTag<G1> + 'static>(label: &[u8], s
         iss(Some(&[a, empty]), None),
         iss(Some(&[empty, a]), None),
     ];
-    for contexts in [&att_contexts[..], &iss_contexts[..]] {
+    // With no attestations as well: an empty list of contexts is not the same as none.
+    let iss0 = |att_apps: Option<&[&[u8]]>, app: Option<&[u8]>| {
+        pcreds
+            .issuance_context_in(vk, b"s", &[], att_apps, app)
+            .unwrap()
+    };
+    let iss0_contexts = [
+        iss0(None, None),
+        iss0(Some(&[]), None),
+        iss0(None, Some(empty)),
+        iss0(Some(&[]), Some(empty)),
+    ];
+    assert_eq!(
+        iss0(None, None),
+        pcreds.issuance_context(vk, b"s", &[]).unwrap()
+    );
+    for contexts in [&att_contexts[..], &iss_contexts[..], &iss0_contexts[..]] {
         for (i, x) in contexts.iter().enumerate() {
             for y in &contexts[i + 1..] {
                 assert_ne!(x, y);
