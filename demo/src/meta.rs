@@ -1,6 +1,8 @@
 //! The application contexts (design §4.1): what each attestation is bound to, and what the
-//! proof is bound to. Both sides encode them with the same code; the VTC rebuilds them from
-//! the public data it receives and never takes context bytes from the prover.
+//! request is bound to, as `pcreds`'s application contexts (`attest_in_context`,
+//! `request_credential_in_context`). Both sides encode them with the same code, and the VTC
+//! rebuilds them from the public data it receives and never takes context bytes from the
+//! prover.
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -11,7 +13,7 @@ use crate::ProtoError;
 
 /// The public metadata of one hidden statement: the fields of the V0 `IdentityVetting`
 /// endorsement that the VTC counts, minus any identifier of the vetter. Sent beside the
-/// attestation; bound into its `ctx_j`.
+/// attestation and bound into its `π_att`, and into the request's `π_iss`, as `ctx_j`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StatementMeta {
@@ -35,7 +37,7 @@ pub struct StatementMeta {
 
 impl StatementMeta {
     /// The `app_j` bytes. A fixed struct serialised by serde_json is deterministic for one
-    /// value; a production encoding would be JCS.
+    /// value, and a production encoding would be JCS.
     pub fn context_bytes(&self) -> Result<Vec<u8>, ProtoError> {
         let mut out = b"openvtc/hidden-vetting/statement/0.1\0".to_vec();
         out.extend(serde_json::to_vec(self).map_err(|e| ProtoError::Serialization(e.to_string()))?);
@@ -49,8 +51,9 @@ impl StatementMeta {
     }
 }
 
-/// What the proof `π_0` is bound to (`app_0`): the VTC's single-use challenge and the binding of
-/// the applicant's PCS `id` to the persona DID they join with.
+/// What the request's `π_iss` is bound to (`app_0`): the VTC's single-use challenge, which is
+/// also the request's `ssid`, and the binding of the applicant's PCS `id` to the persona DID
+/// they join with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofContext {

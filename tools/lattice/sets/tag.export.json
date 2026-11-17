@@ -1,0 +1,38 @@
+{
+  "blocks": [
+    {
+      "name": "usk",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 16
+    },
+    {
+      "name": "e",
+      "norm": {
+        "linf_exact": 7
+      },
+      "placement": "ajtai",
+      "rows": 8
+    }
+  ],
+  "requirements": {
+    "alpha_squared": 3072,
+    "approx_alpha_squared": 44212392,
+    "l": 2,
+    "l2_bounds_squared": [],
+    "l2_rows": [],
+    "lifted_moduli": [
+      {
+        "max_integer_coefficient": 503808007,
+        "modulus": 983040
+      }
+    ],
+    "linf_bound": 513,
+    "m1": 24,
+    "max_integer_coefficient": 503808007,
+    "n_bin": 24,
+    "n_prime": 2
+  }
+}

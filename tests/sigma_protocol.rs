@@ -20,7 +20,7 @@ use ark_ec::{
 use ark_ff::{Field, One, UniformRand, Zero};
 use predicate_credential_system::{
     Error,
-    hash::{Transcript, h1_transcript},
+    hash::duplex_sponge::{DuplexSponge, derive_session_id, squeeze_scalar},
     serialization::WireFormat,
     sigma::{
         FSProof, GroupRelation, GtEquation, LinearEquation, LinearRelation, PairingRelation,
@@ -304,7 +304,7 @@ fn simulated_transcripts_verify_bn254() {
 fn simulator_works_for_false_statements() {
     let mut rng = StdRng::seed_from_u64(0x51_0003);
     let Fixture { mut stmt, witness } = g1_only::<Bls12_381>(&mut rng);
-    stmt.g1[0].target += <Bls12_381 as Pairing>::G1::generator();
+    stmt.g1[0].image[0].0 += <Bls12_381 as Pairing>::G1::generator();
     let rel = stmt.build();
     assert!(!rel.is_satisfied_by(&witness));
     let c = <Bls12_381 as Pairing>::ScalarField::rand(&mut rng);
@@ -386,16 +386,21 @@ fn extractor_recovers_one_value_for_the_shared_variable() {
     assert_eq!(extracted[USK], witness[USK]);
 
     // the single extracted usk satisfies the tag clause and the possession clause separately
+    // (each is a statement in `usk` alone: its instance has one scalar, Sigma -04 §3.2)
     let mut tag_only = Statement::<E> {
         num_scalars: 3,
         g1: vec![stmt.g1[0].clone()],
         g2: vec![],
         gt: vec![],
     };
-    assert!(tag_only.build().is_satisfied_by(&extracted));
+    let clause = tag_only.build();
+    assert_eq!(clause.num_scalars(), 1);
+    assert!(clause.is_satisfied_by(&extracted[..1]));
     tag_only.g1.clear();
     tag_only.gt.push(stmt.gt[0].clone());
-    assert!(tag_only.build().is_satisfied_by(&extracted));
+    let clause = tag_only.build();
+    assert_eq!(clause.num_scalars(), 1);
+    assert!(clause.is_satisfied_by(&extracted[..1]));
 }
 
 /// A statement whose clauses are individually true but for DIFFERENT values of the "shared"
@@ -530,14 +535,19 @@ fn interactive_verifier_rejects_malformed_transcripts_without_panicking() {
 // Lazy G_T evaluation = naive evaluation with explicit pairings and G_T exponentiations
 // ---------------------------------------------------------------------------------------------
 
-fn naive_product<E: Pairing>(product: &[(E::G1, E::G2)]) -> PairingOutput<E> {
-    product.iter().map(|(p, q)| E::pairing(*p, *q)).sum()
+/// `Σ coeff · e(P, Q)` over the image terms, with explicit pairings and `G_T` exponentiations.
+fn naive_image<E: Pairing>(eq: &GtEquation<E>) -> PairingOutput<E> {
+    eq.image
+        .iter()
+        .map(|(p, q, coeff)| E::pairing(*p, *q) * coeff)
+        .sum()
 }
 
+/// `Σ coeff · x[var] · e(P, Q)` over the terms, the same way.
 fn naive_gt_eval<E: Pairing>(eq: &GtEquation<E>, x: &[E::ScalarField]) -> PairingOutput<E> {
     eq.terms
         .iter()
-        .map(|(var, product)| naive_product::<E>(product) * x[var.index()])
+        .map(|(var, p, q, coeff)| E::pairing(*p, *q) * (*coeff * x[var.index()]))
         .sum()
 }
 
@@ -555,7 +565,7 @@ fn lazy_equals_naive<E: Pairing>(seed: u64) {
         let recomputed = rel.recompute_commitment(&c, x).unwrap();
         for (i, eq) in stmt.gt.iter().enumerate() {
             let naive = naive_gt_eval::<E>(eq, x);
-            let target = naive_product::<E>(&eq.target);
+            let target = naive_image::<E>(eq);
             assert_eq!(image.gt[i], naive, "evaluate, G_T equation {i}");
             assert_eq!(
                 recomputed.gt[i],
@@ -565,20 +575,28 @@ fn lazy_equals_naive<E: Pairing>(seed: u64) {
         }
         // the G_1 / G_2 components against the defining formula
         for (i, eq) in stmt.g1.iter().enumerate() {
-            let naive: E::G1 = eq.terms.iter().map(|(v, b)| *b * x[v.index()]).sum();
+            let naive: E::G1 = eq
+                .terms
+                .iter()
+                .map(|(v, b, coeff)| *b * (*coeff * x[v.index()]))
+                .sum();
             assert_eq!(image.g1[i], naive);
-            assert_eq!(recomputed.g1[i], naive - eq.target * c);
+            assert_eq!(recomputed.g1[i], naive - eq.image_value() * c);
         }
         for (i, eq) in stmt.g2.iter().enumerate() {
-            let naive: E::G2 = eq.terms.iter().map(|(v, b)| *b * x[v.index()]).sum();
+            let naive: E::G2 = eq
+                .terms
+                .iter()
+                .map(|(v, b, coeff)| *b * (*coeff * x[v.index()]))
+                .sum();
             assert_eq!(image.g2[i], naive);
-            assert_eq!(recomputed.g2[i], naive - eq.target * c);
+            assert_eq!(recomputed.g2[i], naive - eq.image_value() * c);
         }
     }
     // on the witness the image is the target
     let image = rel.evaluate(&witness).unwrap();
     for (i, eq) in stmt.gt.iter().enumerate() {
-        assert_eq!(image.gt[i], naive_product::<E>(&eq.target));
+        assert_eq!(image.gt[i], naive_image::<E>(eq));
     }
 }
 
@@ -604,13 +622,16 @@ fn lazy_gt_relation_agrees_with_explicit_gt_group_relation() {
     let lazy = stmt.build();
 
     let eq = &stmt.gt[0];
+    // the possession clause has one term, (usk, σ_1, Ỹ_1, 1)
+    assert_eq!(eq.terms.len(), 1);
+    let (_, p, q, coeff) = eq.terms[0];
     let mut explicit = GroupRelation::<PairingOutput<E>>::new();
     let x = explicit.alloc_scalar();
     explicit
         .add_equation(LinearEquation::dlog(
             x,
-            naive_product::<E>(&eq.terms[0].1),
-            naive_product::<E>(&eq.target),
+            E::pairing(p, q) * coeff,
+            naive_image::<E>(eq),
         ))
         .unwrap();
     assert!(explicit.is_satisfied_by(&witness));
@@ -760,43 +781,48 @@ fn single_element_mutations<E: Pairing>(stmt: &Statement<E>) -> Vec<(String, Sta
         for j in 0..stmt.g1[i].terms.len() {
             push(format!("g1[{i}].base[{j}]"), &|s| s.g1[i].terms[j].1 += d1);
         }
-        push(format!("g1[{i}].target"), &|s| s.g1[i].target += d1);
+        for k in 0..stmt.g1[i].image.len() {
+            push(format!("g1[{i}].image[{k}]"), &|s| s.g1[i].image[k].0 += d1);
+        }
     }
     for i in 0..stmt.g2.len() {
         for j in 0..stmt.g2[i].terms.len() {
             push(format!("g2[{i}].base[{j}]"), &|s| s.g2[i].terms[j].1 += d2);
         }
-        push(format!("g2[{i}].target"), &|s| s.g2[i].target += d2);
+        for k in 0..stmt.g2[i].image.len() {
+            push(format!("g2[{i}].image[{k}]"), &|s| s.g2[i].image[k].0 += d2);
+        }
     }
+    let half = E::ScalarField::from(2u64)
+        .inverse()
+        .expect("2 is invertible");
     for i in 0..stmt.gt.len() {
         for j in 0..stmt.gt[i].terms.len() {
-            for k in 0..stmt.gt[i].terms[j].1.len() {
-                push(format!("gt[{i}].term[{j}].pair[{k}].P"), &|s| {
-                    s.gt[i].terms[j].1[k].0 += d1;
-                });
-                push(format!("gt[{i}].term[{j}].pair[{k}].Q"), &|s| {
-                    s.gt[i].terms[j].1[k].1 += d2;
-                });
-            }
-        }
-        for k in 0..stmt.gt[i].target.len() {
-            push(format!("gt[{i}].target.pair[{k}].P"), &|s| {
-                s.gt[i].target[k].0 += d1
+            push(format!("gt[{i}].term[{j}].P"), &|s| {
+                s.gt[i].terms[j].1 += d1
             });
-            push(format!("gt[{i}].target.pair[{k}].Q"), &|s| {
-                s.gt[i].target[k].1 += d2
+            push(format!("gt[{i}].term[{j}].Q"), &|s| {
+                s.gt[i].terms[j].2 += d2
             });
         }
-        // Same G_T element, different pairing preimage: e(2P, Q) = e(P, 2Q). The statement is
-        // bound at the level of the preimages, so this is a different statement too.
-        push(format!("gt[{i}].target.pair[0] re-balanced"), &|s| {
-            let (p, q) = s.gt[i].target[0];
-            s.gt[i].target[0] = (p + p, q);
+        for k in 0..stmt.gt[i].image.len() {
+            push(format!("gt[{i}].image[{k}].P"), &|s| {
+                s.gt[i].image[k].0 += d1
+            });
+            push(format!("gt[{i}].image[{k}].Q"), &|s| {
+                s.gt[i].image[k].1 += d2
+            });
+        }
+        // The same G_T element from another pairing preimage: e(2P, Q/2) = e(P, Q). The
+        // statement is bound to the preimages, so this is a different statement too, although
+        // the witness still satisfies it.
+        push(format!("gt[{i}].image[0] re-balanced"), &|s| {
+            let (p, q, coeff) = s.gt[i].image[0];
+            s.gt[i].image[0] = (p + p, q * half, coeff);
         });
     }
 
     // shape and variable assignment
-    push("one more variable".into(), &|s| s.num_scalars += 1);
     if stmt.num_scalars >= 2 {
         let v = vars::<E>(stmt.num_scalars);
         if let Some(eq) = stmt.g1.first() {
@@ -845,23 +871,34 @@ fn fs_rejects_every_change_of_the_statement() {
             );
         }
         checked.push(mutations.len());
+        // A variable allocated after the last one that is used is not part of the instance
+        // (Sigma -04 §3.2: "Trailing unused scalar variables are not part of the instance"): the
+        // statement, and with it the proof, stays the same.
+        let mut more = stmt.clone();
+        more.num_scalars += 1;
+        assert_eq!(
+            more.build().serialize_instance().unwrap(),
+            rel.serialize_instance().unwrap()
+        );
+        assert!(fiat_shamir::verify(&more.build(), b"ctx", &proof), "{name}");
     }
-    // Guard against a silently empty loop. Per fixture: one mutation per base, per target and
-    // per side of every pairing preimage, one re-balancing per G_T equation, plus the shape
-    // mutations that apply (G1: 5+5, G2: 5+1, GT: 7+1, mixed: 5+3+7+13 and 6).
-    assert_eq!(checked, [10, 6, 8, 34]);
+    // Guard against a silently empty loop. Per fixture: one mutation per base, per image term
+    // and per side of every pairing, one re-balancing per G_T equation, plus the shape mutations
+    // that apply (G1: 5+4, G2: 5, GT: 7, mixed: 5+3+7+13 and 5).
+    assert_eq!(checked, [9, 5, 7, 33]);
 }
 
-/// The "weak" transform that hashes `ctx` and the commitment but NOT the statement.
-fn weak_challenge<R: LinearRelation>(ctx: &[u8], commitment: &R::Image) -> R::Scalar {
-    let mut t: Transcript = h1_transcript(ctx);
-    t.append_serializable(b"commitment", commitment).unwrap();
-    t.challenge_scalar()
+/// The "weak" transform: the crate's tag of `ctx` (which names the ciphersuite of `rel` and
+/// nothing else of it) and the commitment, but NOT the statement.
+fn weak_challenge<R: LinearRelation>(rel: &R, ctx: &[u8], commitment: &R::Image) -> R::Scalar {
+    let mut sponge = DuplexSponge::new(&derive_session_id(&fiat_shamir::tag(rel, ctx)));
+    sponge.absorb(&rel.serialize_image(commitment).unwrap());
+    squeeze_scalar(&mut sponge)
 }
 
 fn weak_verify<R: LinearRelation>(rel: &R, ctx: &[u8], proof: &FSProof<R::Scalar>) -> bool {
     rel.recompute_commitment(&proof.challenge, &proof.responses)
-        .is_ok_and(|a| weak_challenge::<R>(ctx, &a) == proof.challenge)
+        .is_ok_and(|a| weak_challenge(rel, ctx, &a) == proof.challenge)
 }
 
 /// MOUNTS the weak Fiat-Shamir attack on an attestation-shaped relation
@@ -908,7 +945,7 @@ fn weak_fiat_shamir_attack_is_mounted_and_fails() {
     };
 
     // (1) The attack is real: it breaks the weak transform.
-    let c_weak = weak_challenge::<PairingRelation<E>>(b"ctx", &commitment);
+    let c_weak = weak_challenge(&statement_with_tag(honest_tag), b"ctx", &commitment);
     let (forged_tag, z) = forge_tag(c_weak);
     assert_ne!(
         forged_tag, honest_tag,
@@ -974,7 +1011,7 @@ fn weak_fiat_shamir_attack_on_a_base_fails() {
     let (a, z) = (G::rand(&mut rng), Fr::rand(&mut rng));
     let forge_base = |c: Fr| (a + target * c) * z.inverse().expect("z is non-zero");
 
-    let c_weak = weak_challenge::<GroupRelation<G>>(b"ctx", &vec![a]);
+    let c_weak = weak_challenge(&relation_with_base(G::generator()), b"ctx", &vec![a]);
     let rel = relation_with_base(forge_base(c_weak));
     let forgery = FSProof {
         challenge: c_weak,
@@ -1026,11 +1063,14 @@ fn fs_proofs_survive_the_wire_and_reject_malformed_bytes() {
         Err(Error::TrailingBytes)
     );
     assert!(FSProof::<Fr>::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+    // the derived encoding is LE64(n) ‖ NARG string
+    assert_eq!(bytes[..8], (rel.num_scalars() as u64).to_le_bytes());
+    assert_eq!(bytes[8..], proof.to_narg()[..]);
     let mut non_canonical = bytes.clone();
-    non_canonical[..32].fill(0xff);
+    non_canonical[8..40].fill(0xff);
     assert!(FSProof::<Fr>::from_bytes(&non_canonical).is_err());
     let mut hostile = bytes.clone();
-    hostile[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
+    hostile[..8].copy_from_slice(&u64::MAX.to_le_bytes());
     assert!(FSProof::<Fr>::from_bytes(&hostile).is_err());
 
     // a flipped bit anywhere in the scalars either fails to decode or fails to verify
@@ -1042,12 +1082,25 @@ fn fs_proofs_survive_the_wire_and_reject_malformed_bytes() {
         assert!(!accepted, "bit flip at byte {position}");
     }
 
-    // compact fixed-format encoding: (1 + n) scalars, n taken from the statement
+    // compact fixed-format encoding, the NARG string: (1 + n) scalars, n taken from the statement
     let mut compact = Vec::new();
     proof.serialize_compact(&mut compact).unwrap();
+    assert_eq!(compact, proof.to_narg());
     assert_eq!(compact.len(), 32 * (1 + rel.num_scalars()));
     let decoded = FSProof::<Fr>::deserialize_compact(&compact[..], rel.num_scalars()).unwrap();
     assert_eq!(decoded, proof);
+    let tag = fiat_shamir::tag(&rel, b"ctx");
+    assert!(fiat_shamir::verify_compact(&tag, &rel, &compact));
+    assert!(!fiat_shamir::verify_compact(
+        &tag,
+        &rel,
+        &compact[..compact.len() - 1]
+    ));
+    assert!(!fiat_shamir::verify_compact(
+        &tag,
+        &rel,
+        &[compact.clone(), vec![0]].concat()
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------

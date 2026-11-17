@@ -1,83 +1,116 @@
-//! The vetter's PCS engine, i.e. what runs inside the vetter's VTA (design §13 C7): the
-//! stable `usk`, the root credentials per period, the token bucket, attest, refresh and
-//! withdraw. openvtc would only drive these.
+//! The vetter's PCS engine, i.e. what runs inside the vetter's VTA (design §13 C7): one key and
+//! one root credential per period, the token bucket, attest, refresh and withdraw. openvtc would
+//! only drive these.
 
 use std::collections::BTreeMap;
 
 use predicate_credential_system::{
-    kiprf::{KIPRF, prove_tag},
-    pcs::{Credential, PredicateCredentialSystem, UserSecretKey},
+    Error as PcsError,
+    pcreds::{Attestation, Backend, Credential, PendingAttestation, User},
     sigma::FSProof,
 };
 use rand::{CryptoRng, RngCore};
 
 use crate::{
     ProtoError,
+    applicant::VettingRequest,
     meta::StatementMeta,
-    scheme::{Base, E, Fr, G1, point_text, scalar_text, vetter_predicate},
-    token::{Reservation, TokenWallet},
+    scheme::{Bk, Fr, G1, point_text, scalar_text},
+    token::{Reservation, TokenSpend, TokenWallet},
     vtc::{Vtc, withdraw_context},
 };
 
 /// An attestation as the applicant receives it (`vetting/attestation/0.1`).
 #[derive(Debug, Clone)]
 pub struct HiddenAttestation {
-    pub attestation: predicate_credential_system::pcs::Attestation<E, Base>,
+    /// The period whose helper key the attestation is under: the applicant's.
+    pub period: String,
+    /// The `ssid` of the vetting session it answers, which the applicant names to ask for a
+    /// refresh.
+    pub session: Vec<u8>,
+    pub attestation: Attestation<Bk>,
     pub meta: StatementMeta,
-    pub token: crate::token::TokenSpend,
+    pub token: TokenSpend,
+}
+
+/// What a vetter holds for one period: its key for the period, the user it is under the
+/// period's helper key, and its root credential.
+struct Enrolment {
+    usk: Fr,
+    user: User<Bk>,
+    cred: Credential<Bk>,
+}
+
+/// A statement this vetter made, kept so that it can be attested again without a new session
+/// (design §4.3).
+struct Logged {
+    session: Vec<u8>,
+    meta: StatementMeta,
 }
 
 pub struct VetterEngine {
     pub member: String,
-    usk: UserSecretKey<E>,
-    id: G1,
-    creds: BTreeMap<String, Credential<E, Base>>,
+    enrolments: BTreeMap<String, Enrolment>,
     wallet: TokenWallet,
     /// A limit below the community's drip, kept here and never sent anywhere (§5.1).
     pub personal_limit: Option<usize>,
     attested: usize,
-    /// What was attested, so an attestation can be refreshed without a new session (§4.3).
-    log: Vec<(G1, StatementMeta)>,
+    log: Vec<Logged>,
+}
+
+/// The `ssid` of a root request: the community, the member and the period.
+fn enrolment_ssid(community: &str, member: &str, period: &str) -> Vec<u8> {
+    let mut ssid = b"openvtc/hidden-vetting/enrol/0.1\0".to_vec();
+    for part in [community, member, period] {
+        ssid.extend((part.len() as u64).to_le_bytes());
+        ssid.extend(part.as_bytes());
+    }
+    ssid
 }
 
 impl VetterEngine {
-    /// A vetter's key pair: generated once, stable for life (§13 C2).
-    pub fn new<R: RngCore + CryptoRng>(
-        member: &str,
-        vtc: &Vtc,
-        rng: &mut R,
-    ) -> Result<Self, ProtoError> {
-        let (id, usk) = vtc.open().user_keygen(rng)?;
-        Ok(Self {
+    pub fn new(member: &str) -> Self {
+        Self {
             member: member.to_string(),
-            usk,
-            id,
-            creds: BTreeMap::new(),
-            wallet: TokenWallet::new(&vtc.community)?,
+            enrolments: BTreeMap::new(),
+            wallet: TokenWallet::new(),
             personal_limit: None,
             attested: 0,
             log: Vec::new(),
-        })
+        }
     }
 
-    pub fn id(&self) -> &G1 {
-        &self.id
+    /// The vetter's identifier under `period`, if it holds a credential for it.
+    pub fn id(&self, period: &str) -> Option<&G1> {
+        self.enrolments.get(period).map(|e| e.user.id())
     }
 
-    /// Root request for the VTC's current period, with the SAME `usk` every time.
+    /// Every identifier the vetter holds, one per period.
+    pub fn ids(&self) -> impl Iterator<Item = &G1> {
+        self.enrolments.values().map(|e| e.user.id())
+    }
+
+    /// Root request for the VTC's current period, with a key drawn for that period. Nothing
+    /// needs a key to outlive its period, since a request never spans two (module `scheme`),
+    /// and a key that is ever recovered then links the tags of one period, not of a career
+    /// (design §18.2).
     pub fn enroll<R: RngCore + CryptoRng>(
         &mut self,
         vtc: &mut Vtc,
         rng: &mut R,
     ) -> Result<(), ProtoError> {
         let period = vtc.current_period().to_string();
-        let f = vetter_predicate(&period);
-        let (request, state) = vtc
-            .open()
-            .root_request(vtc.hvk(), &f, &self.id, &self.usk, rng)?;
-        let pre = vtc.issue_vetter_root(&self.member, &self.id, &request, rng)?;
-        let cred = vtc.open().unblind(vtc.hvk(), &self.usk, &f, &pre, &state)?;
-        self.creds.insert(period, cred);
+        let ssid = enrolment_ssid(&vtc.community, &self.member, &period);
+        let hvk = vtc.hvk(&period)?.clone();
+        let usk = <Bk as Backend>::tag_keygen(vtc.pcreds().params(), rng);
+        let user = vtc.pcreds().user(&hvk, usk)?;
+        let (message, state) =
+            vtc.pcreds()
+                .request_credential(&hvk, &user, Vec::new(), &ssid, rng)?;
+        let pre = vtc.issue_vetter_root(&self.member, &period, &message, &ssid, rng)?;
+        let cred = vtc.pcreds().unblind(&hvk, &user, &pre, state)?;
+        self.enrolments
+            .insert(period, Enrolment { usk, user, cred });
         Ok(())
     }
 
@@ -90,7 +123,11 @@ impl VetterEngine {
         r: usize,
         rng: &mut R,
     ) -> Result<(), ProtoError> {
-        let tvk = vtc.tokens.tvk().clone();
+        let tvk = vtc
+            .tokens
+            .tvk(label)
+            .ok_or_else(|| ProtoError::LabelNotLive(label.to_string()))?
+            .clone();
         let reqs = self
             .wallet
             .prepare(&tvk, label, &self.member, tick, r, rng)?;
@@ -100,9 +137,11 @@ impl VetterEngine {
         Ok(())
     }
 
-    /// Tokens whose label closed are gone.
+    /// Tokens whose label closed are gone, and so are the keys of periods that are no longer
+    /// live. The log of statements stays, for refreshes.
     pub fn expire(&mut self, vtc: &Vtc) {
         self.wallet.expire(vtc.tokens.live_labels());
+        self.enrolments.retain(|period, _| vtc.is_live(period));
     }
 
     pub fn tokens_held(&self) -> usize {
@@ -135,95 +174,148 @@ impl VetterEngine {
         self.wallet.release(r);
     }
 
-    /// Attest for `applicant_id` after the human check: spend the reserved token, bind its
-    /// serial and the statement metadata into `ctx_j`, attest under the newest live period.
+    /// Attest for the applicant of `request` after the human check: check its `π_id` under the
+    /// applicant's period, spend the reserved token, bind its serial and the statement metadata
+    /// into the attestation's context, and attest with this vetter's credential of that period.
     pub fn attest<R: RngCore + CryptoRng>(
         &mut self,
         vtc: &Vtc,
         reservation: &Reservation,
-        applicant_id: &G1,
+        request: &VettingRequest,
         meta: StatementMeta,
         rng: &mut R,
     ) -> Result<HiddenAttestation, ProtoError> {
-        let period = vtc
-            .live_periods()
-            .iter()
-            .find(|p| self.creds.contains_key(*p))
-            .cloned()
-            .ok_or(ProtoError::NoLiveCredential)?;
-        let token = self.wallet.spend(vtc.tokens.tvk(), reservation, rng)?;
-        self.attest_with_token(vtc, &period, token, applicant_id, meta, rng)
+        let pending = self.receive(vtc, request)?;
+        let token = self.wallet.spend(reservation, rng)?;
+        self.answer(vtc, request, pending, token, meta, rng)
     }
 
     /// ADVERSARY HOOK for tests: attest with a token of the caller's choosing, e.g. one already
-    /// spent. An honest engine never does this; the VTC's spent set is what stops it.
+    /// spent. An honest engine never does this, and the VTC's spent set is what stops it.
     #[doc(hidden)]
     pub fn attest_with_token<R: RngCore + CryptoRng>(
         &mut self,
         vtc: &Vtc,
-        period: &str,
-        token: crate::token::TokenSpend,
-        applicant_id: &G1,
+        token: TokenSpend,
+        request: &VettingRequest,
+        meta: StatementMeta,
+        rng: &mut R,
+    ) -> Result<HiddenAttestation, ProtoError> {
+        let pending = self.receive(vtc, request)?;
+        self.answer(vtc, request, pending, token, meta, rng)
+    }
+
+    /// The credential of a live period.
+    fn enrolment(&self, vtc: &Vtc, period: &str) -> Result<&Enrolment, ProtoError> {
+        vtc.hvk(period)?;
+        self.enrolments
+            .get(period)
+            .ok_or_else(|| ProtoError::NoCredentialForPeriod(period.to_string()))
+    }
+
+    /// The request's `π_id`, checked under the applicant's period and this vetter's contact
+    /// name, before any token is spent.
+    fn receive(
+        &self,
+        vtc: &Vtc,
+        request: &VettingRequest,
+    ) -> Result<PendingAttestation<Bk>, ProtoError> {
+        self.enrolment(vtc, &request.period)?;
+        Ok(vtc.pcreds().receive_attestation_request(
+            vtc.hvk(&request.period)?,
+            &request.request,
+            &request.ssid,
+            self.member.as_bytes(),
+        )?)
+    }
+
+    fn answer<R: RngCore + CryptoRng>(
+        &mut self,
+        vtc: &Vtc,
+        request: &VettingRequest,
+        pending: PendingAttestation<Bk>,
+        token: TokenSpend,
         mut meta: StatementMeta,
         rng: &mut R,
     ) -> Result<HiddenAttestation, ProtoError> {
-        let period = period.to_string();
         meta.token_label = token.label.clone();
         meta.token_serial = scalar_text(&token.serial)?;
         let app = meta.context_bytes()?;
-        let attestation = vtc.open().attest_in_context(
-            vtc.hvk(),
-            &self.usk,
-            &vetter_predicate(&period),
-            &self.creds[&period],
-            applicant_id,
+        let enrolment = self.enrolment(vtc, &request.period)?;
+        let attestation = vtc.pcreds().attest_in_context(
+            vtc.hvk(&request.period)?,
+            &enrolment.user,
+            &enrolment.cred,
+            pending,
             &app,
             rng,
         )?;
         self.attested += 1;
-        self.log.push((*applicant_id, meta.clone()));
+        self.log.push(Logged {
+            session: request.ssid.clone(),
+            meta: meta.clone(),
+        });
         Ok(HiddenAttestation {
+            period: request.period.clone(),
+            session: request.ssid.clone(),
             attestation,
             meta,
             token,
         })
     }
 
-    /// Refresh after a rotation: the same statement, a fresh token, the current period. The
-    /// tag is the same as before (§13 C2), so the two cannot count as two vetters.
+    /// Refresh: the statement this vetter made in the session `session`, attested again for a
+    /// new request of the same applicant, with a fresh token and no new human check (design
+    /// §4.3). After a rotation the new request is under the new period, with a new identifier,
+    /// so the attestation has a new tag: tags under different helper keys are unlinkable, which
+    /// is why a request never mixes periods, and so why one vetter cannot count twice in one.
+    /// The vetter's client knows the applicant by the session the refresh request arrives on.
+    /// There is no transport here, so the prototype names the session by its `ssid`.
     pub fn refresh<R: RngCore + CryptoRng>(
         &mut self,
         vtc: &Vtc,
-        applicant_id: &G1,
+        session: &[u8],
+        request: &VettingRequest,
         rng: &mut R,
     ) -> Result<HiddenAttestation, ProtoError> {
-        let (_, meta) = self
+        let meta = self
             .log
             .iter()
             .rev()
-            .find(|(id, _)| id == applicant_id)
-            .cloned()
-            .ok_or(ProtoError::NoLiveCredential)?;
+            .find(|l| l.session == session)
+            .map(|l| l.meta.clone())
+            .ok_or(ProtoError::NoSuchStatement)?;
         let reservation = self.accept(None, 0)?;
-        self.attested -= 1; // a refresh is not a new vetting
-        self.attest(vtc, &reservation, applicant_id, meta, rng)
+        match self.attest(vtc, &reservation, request, meta, rng) {
+            Ok(att) => {
+                self.attested -= 1; // a refresh is not a new vetting
+                Ok(att)
+            }
+            Err(e) => {
+                self.wallet.release(&reservation);
+                Err(e)
+            }
+        }
     }
 
-    /// Withdraw one statement: the tag, and a proof of knowledge of the key behind it that
-    /// does not link to this vetter's `id` (§4.4).
+    /// Withdraw one statement: the tag `t = Tag(usk, x_Q)` at the applicant's recipient point
+    /// under `period`, and a proof of knowledge of the key behind it that does not link to this
+    /// vetter's identifier (§4.4).
     pub fn withdraw<R: RngCore + CryptoRng>(
         &self,
         vtc: &Vtc,
+        period: &str,
         applicant_id: &G1,
         rng: &mut R,
     ) -> Result<(G1, FSProof<Fr>), ProtoError> {
-        let prf = vtc.open().tag();
-        let s = vtc.open().tag_point(applicant_id)?;
-        let tag = prf
-            .eval(self.usk.expose_scalar(), &s)
-            .ok_or(predicate_credential_system::Error::UndefinedTag)?;
-        let ctx = withdraw_context(&vtc.community, &point_text(applicant_id)?);
-        let proof = prove_tag(prf, self.usk.expose_scalar(), &tag, &s, &ctx, rng)?;
+        let enrolment = self.enrolment(vtc, period)?;
+        let hvk = vtc.hvk(period)?;
+        let params = vtc.pcreds().params();
+        let xq = vtc.pcreds().recipient_point(hvk.vk(), applicant_id)?;
+        let tag =
+            <Bk as Backend>::tag(params, &enrolment.usk, &xq).ok_or(PcsError::UndefinedTag)?;
+        let ctx = withdraw_context(&vtc.community, period, &point_text(applicant_id)?);
+        let proof = <Bk as Backend>::prove_tag(params, &tag, &xq, &enrolment.usk, &ctx, rng)?;
         Ok((tag, proof))
     }
 }

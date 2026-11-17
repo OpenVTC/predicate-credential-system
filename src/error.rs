@@ -36,6 +36,13 @@ pub enum Error {
         /// The length that was supplied.
         actual: usize,
     },
+    /// A statement is not a valid instance (`ValidateInstance` of
+    /// `draft-irtf-cfrg-sigma-protocols-04`, §3.5, or its analogue for the pairing extension of
+    /// [`crate::sigma::relation`]), or its serialization is malformed. The payload names the
+    /// failed check: a count or an index of `2^32` or more, an element index beyond the listed
+    /// elements, a listed element that no equation uses, or truncated input.
+    #[error("invalid instance: {0}")]
+    InvalidInstance(&'static str),
 
     // ----- KI-PRF --------------------------------------------------------------------------
     /// `TagEval(K, s) = ⊥`: the tag is undefined at this point (Def. "Non-adaptive
@@ -49,13 +56,14 @@ pub enum Error {
     InvalidTag,
 
     // ----- credential base -----------------------------------------------------------------
-    /// A key is outside its key space (e.g. a zero component where the paper samples from
-    /// `Z_p^*`), or is degenerate in a way that would make a relation vacuous (e.g. `Ỹ_1 = 1`
-    /// for `Σ-PS`; see `CredentialBase::is_well_formed_key`).
+    /// A key is outside its key space, e.g. a helper key outside the admissible key domain
+    /// `V_pp` of the base (for `Σ-PS`: `Y ≠ 1`, `Ỹ ≠ 1` and `e(Y, g̃) = e(g_1, Ỹ)`;
+    /// [`crate::pcreds::Protocol::helper_key`]); also a helper, a helper key or an evaluated
+    /// request that belongs to another deployment or another helper.
     #[error("invalid key")]
     InvalidKey,
-    /// A message is outside the signing-message space `M_Σ` (e.g. an identity component of an
-    /// SPS-EQ message vector).
+    /// A value is outside its message space, e.g. a ternary polynomial of the lattice
+    /// instantiation with a coefficient outside `{-1, 0, 1}`.
     #[error("message outside the message space")]
     InvalidMessage,
     /// A credential does not verify, or is malformed.
@@ -68,67 +76,69 @@ pub enum Error {
     #[error("invalid issuance encoding")]
     InvalidIssuanceEncoding,
 
-    // ----- PCS layer -----------------------------------------------------------------------
-    /// A Fiat-Shamir proof (`π_0`, or a stand-alone proof) does not verify.
+    // ----- protocol layer ------------------------------------------------------------------
+    /// A Fiat-Shamir proof (`π_id`, `π_att`, `π_iss`, `π_prove`, or a stand-alone proof) does
+    /// not verify.
     #[error("invalid proof")]
     InvalidProof,
-    /// An attestation `att_j` does not verify (`VerifyAtt = 0`).
-    #[error("invalid attestation")]
-    InvalidAttestation,
-    /// The number of attestations differs from the threshold `k` of the predicate `f_k`.
-    #[error("wrong number of attestations: the predicate requires {expected}, got {actual}")]
-    WrongAttestationCount {
-        /// The threshold `k`.
-        expected: usize,
-        /// The number of attestations supplied.
+    /// A credential request carries more attestations than the limit the helper set
+    /// ([`crate::pcreds::Policy::with_max_attestations`]; there is none by default).
+    #[error(
+        "too many attestations: the policy verifies at most {max}, the request carries {actual}"
+    )]
+    TooManyAttestations {
+        /// The cap of the policy.
+        max: usize,
+        /// The number of attestations in the request.
         actual: usize,
     },
-    /// Two attestations carry the same tag (`CheckAtts_P`: `|{T_j}| ≠ k`).
-    #[error("two attestations carry the same tag")]
-    DuplicateAttester,
-    /// The requester's own tag occurs among the attestation tags (`CheckAtts_P`: `T_0 ∈ {T_j}`).
-    #[error("self-attestation: the requester's tag occurs among the attestation tags")]
-    SelfAttestation,
-    /// The public attribute policy `P` rejects the disclosed predicate labels.
-    #[error("the attribute policy rejects the disclosed predicate labels")]
-    PolicyRejected,
-    /// `id ≠ Tag(usk, c_0)`: the identifier does not belong to the user key it is used with, so
-    /// `(id, usk) ∉ supp(UKeyGen(pp))`, which membership in `R_PCS` requires (Def. "PCS
-    /// authorization relation").
+    /// The helper's issuance record ([`crate::pcreds::IssuanceStore`]) failed; nothing was
+    /// released.
+    #[error("issuance store error: {0}")]
+    Storage(String),
+    /// The identifier does not belong to the user key it is used with (`id ≠ Tag(usk, x_0)`), or
+    /// a user (or a pending attestation) belongs to another deployment.
     #[error("the identifier does not belong to the user key")]
     IdentifierMismatch,
-    /// The issuance state does not belong to the `(usk, f)` it is used with (`Unblind`, step 2).
-    #[error("the issuance state does not match the user key and predicate")]
+    /// The issuance state does not belong to the user (or the deployment) it is used with
+    /// (`Unblind`).
+    #[error("the issuance state does not match the user key")]
     IssuanceStateMismatch,
-    /// The credential base needs `id = g_1^usk` but the tag parameters do not provide it: `Σ-EQ`
-    /// with `Tag_DY`, or with a `Tag_DDH` instance whose point `htag(c_0) = g_1` is not
-    /// programmed (proof sketch of the Lemma on `Σ-EQ`, §3.2.3).
-    #[error("the credential base is incompatible with the tag instantiation")]
-    IncompatibleBaseAndTag,
-    /// A threshold-0 predicate on the ordinary `Prove → VerifyProof → Issue` path: it would hand
-    /// out credentials without any endorser. Threshold 0 is reserved for root predicates, which
-    /// have an explicitly named path of their own.
-    #[error("threshold 0 is not a valid predicate")]
+    /// A threshold `0` would hand out credentials without any endorser; root users are admitted
+    /// by the helper's explicit decision instead ([`crate::pcreds::Decision::Root`]).
+    #[error("threshold 0 is not a valid policy")]
     ZeroThreshold,
-    /// The root path (Remark "Chaining and the base case") was given a predicate with a
-    /// non-zero threshold; a root predicate `f_root` has threshold 0.
-    #[error("the root path requires a root predicate (threshold 0)")]
-    NotARootPredicate,
     /// Received public parameters are not the output of the transparent `Setup` for their own
     /// deployment label.
     #[error("public parameters are not an output of Setup: {0}")]
     InvalidPublicParameters(&'static str),
+
+    // ----- lattice instantiation (feature `lattice`) -----------------------------------------
+    /// The helper key has answered `Q_max = 2^48` calls of `SampPre` (`BlindIssue` of `Σ-vSIS`):
+    /// the issuance cap of the paper's post-quantum instantiation (§6.2.3, "Issuance cap"). The
+    /// helper rotates its key (a new `KeyGen`) and publishes the new `hvk`; the key issues nothing
+    /// from now on.
+    #[cfg(feature = "lattice")]
+    #[error("issuance cap reached: the helper key has answered Q_max = 2^48 preimage requests")]
+    IssuanceCapReached,
+    /// A failure inside the lattice backends (Jali or `ntru-trapdoor`) that is not one of the
+    /// paper's `⊥`: a parameter set refused at load time, a prover that exhausted its restarts
+    /// with fresh seeds, a sampler that exhausted its attempts. Carried as the backend's display
+    /// string, like the other foreign errors.
+    #[cfg(feature = "lattice")]
+    #[error("lattice backend error: {0}")]
+    LatticeBackend(String),
 
     // ----- encoding / hashing --------------------------------------------------------------
     /// An object handed to an algorithm contains a value that is NOT an element of the group its
     /// type stands for: a point that is not on the curve, or not in the prime-order subgroup
     /// (`ark_serialize::Valid::check` fails). The payload names the offending argument.
     ///
-    /// Implementation note. In the paper every `T_j`, `T_0`, `C`, `cred*`, `hvk`, ... is a group
+    /// Implementation note. In the paper every `t`, `id`, `Ĉ`, `σ*`, `hvk`, ... is a group
     /// element by definition. In code a value of type `E::G1` is only ASSUMED to be one:
     /// validated decoding ([`crate::serialization::from_bytes`], the compact decoders) guarantees
     /// it, but a value that was decoded without validation, from an uncompressed encoding, or assembled
-    /// by hand need not be. The algorithms of [`crate::pcs`] therefore re-validate what they
+    /// by hand need not be. The algorithms of [`crate::pcreds`] therefore re-validate what they
     /// receive from another party and do not depend on how it was built. This is load-bearing:
     /// pairing checks are blind to a component of small order in a `G_1` argument, and a Schnorr
     /// clause whose target carries a component of order 3 (the cofactor of BLS12-381 `G_1` is

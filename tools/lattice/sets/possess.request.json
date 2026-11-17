@@ -1,0 +1,75 @@
+{
+  "schema": "jali-params-request/2",
+  "id": "pcreds128-g15-k16-mdef-d128-lr3-possess-beta439",
+  "mode": "native",
+  "degree": 128,
+  "modulus": {
+    "search": {
+      "factors": 1
+    }
+  },
+  "hardness": {
+    "policy": "beta",
+    "beta_min": 439
+  },
+  "statement": {
+    "source": "requirements",
+    "requirements": {
+      "alpha_squared": 10368,
+      "l": 24,
+      "l2_bounds_squared": [
+        90803788942
+      ],
+      "l2_rows": [
+        16
+      ],
+      "linf_bound": 4947423549,
+      "m1": 81,
+      "max_integer_coefficient": 5187734752006453,
+      "n_bin": 81,
+      "n_prime": 8
+    },
+    "statement_modulus": 1048573,
+    "blocks": [
+      {
+        "name": "s",
+        "norm": {
+          "l2_squared_range": {
+            "max": 90803788942,
+            "min": 1
+          }
+        },
+        "placement": "bdlop",
+        "rows": 16
+      },
+      {
+        "name": "x1",
+        "norm": {
+          "linf_exact": 1
+        },
+        "placement": "ajtai",
+        "rows": 16
+      },
+      {
+        "name": "usk",
+        "norm": {
+          "linf_exact": 1
+        },
+        "placement": "ajtai",
+        "rows": 16
+      },
+      {
+        "name": "x0",
+        "norm": {
+          "linf_exact": 1
+        },
+        "placement": "ajtai",
+        "rows": 48
+      }
+    ],
+    "movable": [
+      "s"
+    ]
+  },
+  "note": "R_Possess (pi_prove) of the lattice backend of predicate-credential-system (tag set R: gamma 15, p 2^16, q_t 983040, m 168; x_0 ternary, ell_r 3; 1 <= ||s||^2 <= floor(beta_s^2)), exported at worst-case public data"
+}

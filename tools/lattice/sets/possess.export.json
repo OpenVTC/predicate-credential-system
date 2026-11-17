@@ -1,0 +1,54 @@
+{
+  "blocks": [
+    {
+      "name": "s",
+      "norm": {
+        "l2_squared_range": {
+          "max": 90803788942,
+          "min": 1
+        }
+      },
+      "placement": "bdlop",
+      "rows": 16
+    },
+    {
+      "name": "x1",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 16
+    },
+    {
+      "name": "usk",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 16
+    },
+    {
+      "name": "x0",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 48
+    }
+  ],
+  "requirements": {
+    "alpha_squared": 10368,
+    "l": 24,
+    "l2_bounds_squared": [
+      90803788942
+    ],
+    "l2_rows": [
+      16
+    ],
+    "linf_bound": 4947423549,
+    "m1": 81,
+    "max_integer_coefficient": 5187734752006453,
+    "n_bin": 81,
+    "n_prime": 8
+  }
+}
