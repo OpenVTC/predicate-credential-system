@@ -5,6 +5,9 @@
 //!
 //! The wire format is the arkworks **compressed** canonical encoding, **validated**, without
 //! trailing bytes: [`to_bytes`], [`from_bytes`] and the blanket trait [`WireFormat`].
+//! A Fiat-Shamir proof ([`FSProof`](crate::sigma::FSProof)) encodes itself: its number of
+//! responses as a little-endian `u64`, then its NARG string, whose scalars are big-endian as
+//! `draft-irtf-cfrg-sigma-protocols-04` writes them.
 //!
 //! Implementation notes (not claims of the paper; the paper only asks to "reject malformed
 //! input", construction box, `VerifyAtt` step 3 and `VerifyProof` step 3):
@@ -26,43 +29,46 @@
 //! # Text forms (cargo feature `serde`)
 //!
 //! Implementation note: nothing here is part of the paper. The canonical wire format of this
-//! crate stays the byte encoding above (and the fixed-format compact codec of [`crate::pcs`]);
+//! crate stays the byte encoding above (and the fixed-format compact codec of
+//! [`crate::pcreds::codec`]);
 //! the `serde` layer wraps it for consumers whose messages and stores are JSON (`serde_json`,
 //! JCS-canonicalised documents, multibase strings). Its items are `to_multibase`,
-//! `from_multibase` and the `#[serde(with = …)]` adapters `canonical`, `secret` and `utf8_label`.
+//! `from_multibase` and the `#[serde(with = …)]` adapters `canonical` and `secret`.
 //!
 //! ## Two shapes
 //!
 //! * **Opaque.** A value with a canonical encoding is ONE string: the multibase **base58btc**
 //!   text (prefix `z`) of its compressed canonical bytes, the convention of a W3C Data Integrity
-//!   `proofValue`. Keys, credentials, pre-credentials, shown credentials, public parameters, tag
-//!   parameters, [`FSProof`](crate::sigma::FSProof) and the secrets are opaque.
-//! * **Structured.** [`Predicate`](crate::pcs::Predicate),
-//!   [`Attestation`](crate::pcs::Attestation), [`IssuanceProof`](crate::pcs::IssuanceProof) and
-//!   [`RootRequest`](crate::pcs::RootRequest) are JSON objects with camelCase members whose leaves
-//!   are opaque strings, so that a policy engine can read, say, the `phi` of every attestation
-//!   without decoding group elements:
+//!   `proofValue`. Keys, credentials, pre-credentials, shows, public parameters, tag parameters,
+//!   [`FSProof`](crate::sigma::FSProof) and the secrets are opaque.
+//! * **Structured.** The messages of the protocol,
+//!   [`AttestationRequest`](crate::pcreds::AttestationRequest),
+//!   [`Attestation`](crate::pcreds::Attestation),
+//!   [`CredentialRequest`](crate::pcreds::CredentialRequest),
+//!   [`Reply`](crate::pcreds::Reply) and [`MembershipProof`](crate::pcreds::MembershipProof), are
+//!   JSON objects with camelCase members whose leaves are opaque strings, so that an application
+//!   can read, say, the tag of every attestation of a request without decoding group elements:
 //!
 //! ```json
-//! { "tag": "z…", "shown": "z…", "phi": "z…", "proof": "z…" }
+//! { "tag": "z…", "show": "z…", "proof": "z…" }
 //! ```
 //!
 //! ## Code that is generic over the base or the tag
 //!
-//! The `Serialize` / `Deserialize` impls of keys, credentials and the like exist per base
+//! The `Serialize` / `Deserialize` impls of keys, credentials and the like exist per type
 //! (`PSVerificationKey`, `BBSPreCredential`, …), not on the associated types of the traits:
-//! adding `serde` bounds to `CredentialBase` behind a feature would change the trait for every
-//! implementor. Generic code uses the adapters instead, which work for anything with a canonical
-//! encoding:
+//! adding `serde` bounds to [`Backend`](crate::pcreds::Backend) behind a feature would change
+//! the trait for every implementor. Generic code uses the adapters instead, which work for
+//! anything with a canonical encoding:
 //!
 //! ```
-//! use predicate_credential_system::cred::CredentialBase;
+//! use predicate_credential_system::pcreds::Backend;
 //!
 //! #[derive(serde::Serialize, serde::Deserialize)]
 //! #[serde(bound = "")]
-//! struct JoinReply<B: CredentialBase> {
+//! struct JoinReply<Bk: Backend> {
 //!     #[serde(with = "predicate_credential_system::serialization::canonical")]
-//!     pre_credential: B::PreCredential,
+//!     pre_credential: Bk::PreCredential,
 //! }
 //! ```
 //!
@@ -70,29 +76,39 @@
 //!
 //! Decoding accepts exactly what encoding produces: base58btc only (any other multibase prefix is
 //! an error), compressed canonical bytes, validated group elements (on the curve and in the
-//! prime-order subgroup), canonical scalars, no trailing bytes, no unknown members. One object
-//! therefore has one JSON form, as it has one binary form. As everywhere in this crate, decoding
+//! prime-order subgroup), canonical scalars, no trailing bytes, a structured message only as a
+//! map with exactly its members, each once (not as the array of its members, which the derived
+//! decoders of `serde` would take), and a [`Reply`](crate::pcreds::Reply) only as `"fail"`,
+//! `"issued"` or `{"preCredential": …}`. One object therefore has one JSON form, as it has one
+//! binary form. As everywhere in this crate, decoding
 //! says nothing about the VALIDITY of an object: the verifiers decide that, and they re-validate
 //! what they are given.
 //!
 //! ## Secrets
 //!
-//! [`UserSecretKey`](crate::pcs::UserSecretKey), [`HelperSecretKey`](crate::pcs::HelperSecretKey), [`IssuanceState`](crate::pcs::IssuanceState), [`Credential`](crate::pcs::Credential) (it carries `m_aux`)
-//! and the signing keys of the bases implement the traits as well, because a consumer has to
-//! keep them somewhere (an issuance state, for instance, lives from `Prove` until the helper
-//! answers). Their text form IS the secret: serialize them only into protected storage and
-//! never into logs or messages. The buffers this module owns are wiped after use; copies made
-//! inside `serde`, `multibase` or the chosen data format are out of its reach.
+//! [`User`](crate::pcreds::User), [`Credential`](crate::pcreds::Credential),
+//! [`IssuanceState`](crate::pcreds::IssuanceState) and the signing keys of the bases implement
+//! the traits as well, because a consumer has to keep them somewhere (an issuance state, for
+//! instance, lives from the credential request until the helper answers). Their text form IS
+//! the secret: serialize them only into protected storage and never into logs or messages. The
+//! buffers this module owns are wiped after use; copies made inside `serde`, `multibase` or the
+//! chosen data format are out of its reach. The helper's key has its own wiped encoding
+//! ([`Helper::to_bytes`](crate::pcreds::Helper::to_bytes)).
 //!
 //! ## Example
 //!
 //! ```
-//! use predicate_credential_system::pcs::Predicate;
+//! use ark_bls12_381::{Bls12_381, G1Projective};
+//! use predicate_credential_system::{
+//!     hash::bls12_381::G1Hasher,
+//!     kiprf::DDH,
+//!     pcreds::{Reply, pairing::{PS, PairingBackend}},
+//! };
 //!
-//! let f = Predicate::new(5, b"members".to_vec());
-//! let json = serde_json::to_string(&f).unwrap();
-//! assert_eq!(json, r#"{"threshold":5,"label":"members"}"#);
-//! assert_eq!(serde_json::from_str::<Predicate>(&json).unwrap(), f);
+//! type Bk = PairingBackend<Bls12_381, PS, DDH<G1Projective, G1Hasher>>;
+//! let json = serde_json::to_string(&Reply::<Bk>::Issued).unwrap();
+//! assert_eq!(json, r#""issued""#);
+//! assert_eq!(serde_json::from_str::<Reply<Bk>>(&json).unwrap(), Reply::Issued);
 //! ```
 
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
@@ -147,6 +163,16 @@ pub trait WireFormat: CanonicalSerialize + CanonicalDeserialize + Sized {
 }
 
 impl<T: CanonicalSerialize + CanonicalDeserialize> WireFormat for T {}
+
+/// The length of the longest multibase base58btc text (`z…`, feature `serde`) of a value of at
+/// most `bytes` bytes: the prefix, then at most $`\lceil n\log 256/\log 58\rceil`$ digits for
+/// $`n`$ bytes (a leading zero byte is one digit `1`), bounded above by $`1.3657\,n+1`$, as
+/// $`\log 256/\log 58 < 1.36566`$. The JSON decoders of the messages refuse a longer leaf
+/// before they decode it ([`crate::pcreds::Backend::max_leaf_bytes`]).
+#[must_use]
+pub const fn max_multibase_len(bytes: usize) -> usize {
+    bytes.saturating_mul(13_657) / 10_000 + 2
+}
 
 #[cfg(test)]
 mod tests {
@@ -230,7 +256,7 @@ mod tests {
 // ---------------------------------------------------------------------------------------------
 
 #[cfg(feature = "serde")]
-pub use self::text::{canonical, from_multibase, secret, to_multibase, utf8_label};
+pub use self::text::{canonical, from_multibase, secret, to_multibase};
 
 /// The `serde` layer (module docs, "Text forms"). One private module, so that a single `cfg`
 /// switches it off; its public items are re-exported above.
@@ -242,25 +268,32 @@ mod text {
     use zeroize::Zeroizing;
 
     use crate::{
-        cred::{
-            CredentialBase, SigmaFriendlyCredentialBase,
-            bbs::{
-                BBSCredential, BBSPreCredential, BBSPublicParams, BBSShownCredential,
-                BBSSigningKey, BBSVerificationKey,
-            },
-            eq::{
-                EQCredential, EQPreCredential, EQShownCredential, EQSigningKey, EQVerificationKey,
-            },
-            mac::{MACCredential, MACKey, MACPreCredential, MACPublicParams, MACShownCredential},
-            ps::{
-                PSCredential, PSPreCredential, PSShownCredential, PSSigningKey, PSVerificationKey,
-            },
-        },
         error::Error,
         hash::HashToGroup,
-        kiprf::{DDH, DY, PCSTag},
-        pcs::{Credential, HelperSecretKey, IssuanceState, PublicParameters, UserSecretKey},
+        kiprf::{DDH, DY, ProtocolTag},
+        pcreds::{
+            Attestation, AttestationRequest, Backend, Credential, CredentialRequest,
+            IssuanceRecord, IssuanceState, Leaf, MembershipProof, ProofKind, PublicParameters,
+            Reply, User,
+            pairing::{
+                BBSCredential, BBSParams, BBSPreCredential, BBSShow, BBSSigningKey,
+                BBSVerificationKey, Base, G1Request, PSPair, PSSigningKey, PSVerificationKey,
+                PairingParams,
+            },
+        },
         sigma::FSProof,
+    };
+    #[cfg(feature = "lattice")]
+    use crate::{
+        kiprf::lwr::LWRTag,
+        lattice::{Rq, Ternary},
+        pcreds::lattice::{
+            LatticeParams, LatticePoint, LatticeProof,
+            base::{
+                VSISCredential, VSISParams, VSISPreCredential, VSISSigningKey, VSISTape,
+                VSISVerificationKey,
+            },
+        },
     };
 
     /// The one multibase base this module emits and accepts: base58btc, prefix `z`.
@@ -383,34 +416,6 @@ mod text {
         }
     }
 
-    /// `#[serde(with = "…")]` for the label of a [`Predicate`](crate::pcs::Predicate): a JSON
-    /// string. Labels are byte strings in this crate and names in practice; a label that is not
-    /// UTF-8 has no JSON form and is a serialization error (its canonical encoding still works).
-    pub mod utf8_label {
-        use serde::{Deserialize, Deserializer, Serializer, ser::Error as _};
-
-        /// Serializes a UTF-8 label as a string.
-        ///
-        /// # Errors
-        /// The serializer's error if the label is not valid UTF-8.
-        pub fn serialize<S: Serializer>(label: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
-            let text = core::str::from_utf8(label).map_err(|_| {
-                S::Error::custom("a predicate label that is not UTF-8 has no JSON form")
-            })?;
-            serializer.serialize_str(text)
-        }
-
-        /// Deserializes a label from a string.
-        ///
-        /// # Errors
-        /// The deserializer's error if the value is not a string.
-        pub fn deserialize<'de, D: Deserializer<'de>>(
-            deserializer: D,
-        ) -> Result<Vec<u8>, D::Error> {
-            String::deserialize(deserializer).map(String::into_bytes)
-        }
-    }
-
     /// Opaque implementations through [`canonical`] / [`secret`].
     macro_rules! opaque {
         ($adapter:ident: $( impl[$($generics:tt)*] $ty:ty; )+) => {$(
@@ -430,51 +435,234 @@ mod text {
 
     opaque! { canonical:
         impl[F: PrimeField] FSProof<F>;
-        impl[E: Pairing, B: SigmaFriendlyCredentialBase<E>, T: PCSTag<E::G1>] PublicParameters<E, B, T>;
+        impl[Bk: Backend] PublicParameters<Bk>;
+        impl[E: Pairing, B: Base<E>, T: ProtocolTag<E::G1>] PairingParams<E, B, T>;
         impl[G: PrimeGroup, H: HashToGroup<G>] DDH<G, H>;
-        impl[G: PrimeGroup] DY<G>;
+        impl[G: PrimeGroup, H] DY<G, H>;
         impl[E: Pairing] PSVerificationKey<E>;
-        impl[E: Pairing] PSCredential<E>;
-        impl[E: Pairing] PSPreCredential<E>;
-        impl[E: Pairing] PSShownCredential<E>;
-        impl[E: Pairing] BBSPublicParams<E>;
+        impl[E: Pairing] PSPair<E>;
+        impl[E: Pairing] G1Request<E>;
+        impl[E: Pairing] BBSParams<E>;
         impl[E: Pairing] BBSVerificationKey<E>;
-        impl[E: Pairing] BBSCredential<E>;
         impl[E: Pairing] BBSPreCredential<E>;
-        impl[E: Pairing] BBSShownCredential<E>;
-        impl[E: Pairing] EQVerificationKey<E>;
-        impl[E: Pairing] EQCredential<E>;
-        impl[E: Pairing] EQPreCredential<E>;
-        impl[E: Pairing] EQShownCredential<E>;
-        impl[G: PrimeGroup] MACPublicParams<G>;
-        impl[G: PrimeGroup] MACCredential<G>;
-        impl[G: PrimeGroup] MACPreCredential<G>;
-        impl[G: PrimeGroup] MACShownCredential<G>;
+        impl[E: Pairing] BBSShow<E>;
+        impl[] IssuanceRecord;
     }
 
     opaque! { secret:
-        impl[E: Pairing] UserSecretKey<E>;
-        impl[B: CredentialBase] HelperSecretKey<B>;
-        impl[E: Pairing, B: SigmaFriendlyCredentialBase<E>] Credential<E, B>;
+        impl[Bk: Backend] User<Bk>;
+        impl[Bk: Backend] Credential<Bk>;
+        impl[Bk: Backend] IssuanceState<Bk>;
         impl[E: Pairing] PSSigningKey<E>;
         impl[E: Pairing] BBSSigningKey<E>;
-        impl[E: Pairing] EQSigningKey<E>;
-        impl[G: PrimeGroup] MACKey<G>;
+        impl[E: Pairing] BBSCredential<E>;
     }
 
-    // `st_iss` has no derived canonical encoding (its hidden message is rebuilt from `usk` and
-    // `m_aux`), so it goes through its own `to_bytes` / `from_bytes`.
-    impl<E: Pairing, B: SigmaFriendlyCredentialBase<E>> Serialize for IssuanceState<E, B> {
-        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            let bytes = self.to_bytes().map_err(serde::ser::Error::custom)?;
-            secret::serialize_bytes(&bytes, serializer)
+    #[cfg(feature = "lattice")]
+    opaque! { canonical:
+        impl[] LatticeParams;
+        impl[] LatticePoint;
+        impl[] LatticeProof;
+        impl[] VSISParams;
+        impl[] VSISVerificationKey;
+        impl[] VSISPreCredential;
+        impl[] LWRTag;
+        impl[] Rq;
+    }
+
+    #[cfg(feature = "lattice")]
+    opaque! { secret:
+        impl[] VSISSigningKey;
+        impl[] VSISCredential;
+        impl[] VSISTape;
+        impl[] Ternary;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // The structured messages: ONE JSON form each
+    // ---------------------------------------------------------------------------------------------
+
+    /// The role of a leaf of a structured message ([`Leaf`]), as a type.
+    trait Role {
+        const LEAF: Leaf;
+    }
+
+    macro_rules! roles {
+        ($( $(#[$doc:meta])* $name:ident => $leaf:expr; )+) => {$(
+            $(#[$doc])*
+            struct $name;
+
+            impl Role for $name {
+                const LEAF: Leaf = $leaf;
+            }
+        )+};
+    }
+
+    roles! {
+        /// `id_Q` or `t`.
+        TagLeaf => Leaf::Tag;
+        /// `σ*`.
+        ShowLeaf => Leaf::Show;
+        /// `Ĉ`.
+        RequestLeaf => Leaf::Request;
+        /// `σ̂`.
+        PreCredentialLeaf => Leaf::PreCredential;
+        /// `π_id`.
+        IdentifierProof => Leaf::Proof(ProofKind::Identifier);
+        /// `π_att`.
+        AttestationProof => Leaf::Proof(ProofKind::Attestation);
+        /// `π_iss`.
+        IssuanceProof => Leaf::Proof(ProofKind::Issuance);
+        /// `π_prove`.
+        PossessionProof => Leaf::Proof(ProofKind::Possession);
+    }
+
+    /// A leaf of a structured message: an opaque string through [`canonical`], refused before
+    /// it is decoded if it is longer than the multibase text of the longest valid leaf of its
+    /// role `R` ([`Backend::max_leaf_bytes`], [`super::max_multibase_len`]).
+    struct Bounded<Bk, R, T>(T, core::marker::PhantomData<fn() -> (Bk, R)>);
+
+    impl<'de, Bk: Backend, R: Role, T: ark_serialize::CanonicalDeserialize> Deserialize<'de>
+        for Bounded<Bk, R, T>
+    {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            use serde::de::Error as _;
+            let text = String::deserialize(deserializer)?;
+            let max = super::max_multibase_len(Bk::max_leaf_bytes(R::LEAF));
+            if text.len() > max {
+                return Err(D::Error::custom(format!(
+                    "a {:?} leaf of {} characters, longer than the {max} of the longest valid one",
+                    R::LEAF,
+                    text.len()
+                )));
+            }
+            let bytes = from_multibase(&text).map_err(D::Error::custom)?;
+            let value = super::from_bytes(&bytes).map_err(D::Error::custom)?;
+            Ok(Bounded(value, core::marker::PhantomData))
         }
     }
 
-    impl<'de, E: Pairing, B: SigmaFriendlyCredentialBase<E>> Deserialize<'de> for IssuanceState<E, B> {
+    /// A member of a structured message that is itself structured (the attestations of a
+    /// credential request).
+    struct Plain<T>(T);
+
+    impl<'de, T: Deserialize<'de>> Deserialize<'de> for Plain<T> {
         fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-            let bytes = secret::deserialize_bytes(deserializer)?;
-            Self::from_bytes(&bytes).map_err(serde::de::Error::custom)
+            T::deserialize(deserializer).map(Plain)
+        }
+    }
+
+    /// The decoder of a structured message: a map (never a sequence: the derived decoders of
+    /// `serde` also accept a struct as the array of its members, a form that encoding never
+    /// produces) with exactly the members that encoding writes, each once.
+    macro_rules! structured {
+        ($ty:ident<$bk:ident>, $expecting:literal, { $( $field:ident : $member:literal => $de:ty ),+ $(,)? }) => {
+            impl<'de, $bk: Backend> Deserialize<'de> for $ty<$bk> {
+                fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                    struct MapOnly<$bk>(core::marker::PhantomData<fn() -> $bk>);
+
+                    impl<'de, $bk: Backend> serde::de::Visitor<'de> for MapOnly<$bk> {
+                        type Value = $ty<$bk>;
+
+                        fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                            f.write_str($expecting)
+                        }
+
+                        fn visit_map<A: serde::de::MapAccess<'de>>(
+                            self,
+                            mut map: A,
+                        ) -> Result<Self::Value, A::Error> {
+                            use serde::de::Error as _;
+                            const MEMBERS: &[&str] = &[$($member),+];
+                            $( let mut $field: Option<$de> = None; )+
+                            while let Some(key) = map.next_key::<String>()? {
+                                match key.as_str() {
+                                    $( $member => {
+                                        if $field.is_some() {
+                                            return Err(A::Error::duplicate_field($member));
+                                        }
+                                        $field = Some(map.next_value()?);
+                                    } )+
+                                    other => return Err(A::Error::unknown_field(other, MEMBERS)),
+                                }
+                            }
+                            Ok($ty {
+                                $( $field: $field.ok_or_else(|| A::Error::missing_field($member))?.0, )+
+                            })
+                        }
+                    }
+
+                    deserializer.deserialize_map(MapOnly(core::marker::PhantomData))
+                }
+            }
+        };
+    }
+
+    structured!(AttestationRequest<Bk>, "an attestation request {\"id\", \"proof\"}", {
+        id: "id" => Bounded<Bk, TagLeaf, Bk::Tag>,
+        proof: "proof" => Bounded<Bk, IdentifierProof, Bk::Proof>,
+    });
+    structured!(Attestation<Bk>, "an attestation {\"tag\", \"show\", \"proof\"}", {
+        tag: "tag" => Bounded<Bk, TagLeaf, Bk::Tag>,
+        show: "show" => Bounded<Bk, ShowLeaf, Bk::Show>,
+        proof: "proof" => Bounded<Bk, AttestationProof, Bk::Proof>,
+    });
+    structured!(CredentialRequest<Bk>, "a credential request {\"id\", \"attestations\", \"request\", \"proof\"}", {
+        id: "id" => Bounded<Bk, TagLeaf, Bk::Tag>,
+        attestations: "attestations" => Plain<Vec<Attestation<Bk>>>,
+        request: "request" => Bounded<Bk, RequestLeaf, Bk::Request>,
+        proof: "proof" => Bounded<Bk, IssuanceProof, Bk::Proof>,
+    });
+    structured!(MembershipProof<Bk>, "a membership proof {\"show\", \"proof\"}", {
+        show: "show" => Bounded<Bk, ShowLeaf, Bk::Show>,
+        proof: "proof" => Bounded<Bk, PossessionProof, Bk::Proof>,
+    });
+
+    /// The decoder of a reply: the strings `"fail"` and `"issued"`, or the one-member map
+    /// `{"preCredential": "z…"}`, which is what encoding writes. Not the maps `{"fail": null}`
+    /// and `{"issued": null}`, which the derived decoder of an enum accepts as well. A reply is
+    /// a value of a self-describing format (JSON).
+    impl<'de, Bk: Backend> Deserialize<'de> for Reply<Bk> {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct OneForm<Bk>(core::marker::PhantomData<fn() -> Bk>);
+
+            impl<'de, Bk: Backend> serde::de::Visitor<'de> for OneForm<Bk> {
+                type Value = Reply<Bk>;
+
+                fn expecting(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                    f.write_str("\"fail\", \"issued\" or {\"preCredential\": …}")
+                }
+
+                fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Reply<Bk>, E> {
+                    match value {
+                        "fail" => Ok(Reply::Fail),
+                        "issued" => Ok(Reply::Issued),
+                        other => Err(E::unknown_variant(other, &["fail", "issued"])),
+                    }
+                }
+
+                fn visit_map<A: serde::de::MapAccess<'de>>(
+                    self,
+                    mut map: A,
+                ) -> Result<Reply<Bk>, A::Error> {
+                    use serde::de::Error as _;
+                    let Some(key) = map.next_key::<String>()? else {
+                        return Err(A::Error::invalid_length(0, &self));
+                    };
+                    if key != "preCredential" {
+                        return Err(A::Error::unknown_variant(&key, &["preCredential"]));
+                    }
+                    let pre = map
+                        .next_value::<Bounded<Bk, PreCredentialLeaf, Bk::PreCredential>>()?
+                        .0;
+                    if map.next_key::<String>()?.is_some() {
+                        return Err(A::Error::invalid_length(2, &self));
+                    }
+                    Ok(Reply::PreCredential(pre))
+                }
+            }
+
+            deserializer.deserialize_any(OneForm(core::marker::PhantomData))
         }
     }
 

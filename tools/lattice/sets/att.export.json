@@ -1,0 +1,73 @@
+{
+  "blocks": [
+    {
+      "name": "s",
+      "norm": {
+        "l2_squared_range": {
+          "max": 90803788942,
+          "min": 1
+        }
+      },
+      "placement": "bdlop",
+      "rows": 16
+    },
+    {
+      "name": "x1",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 16
+    },
+    {
+      "name": "usk",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 16
+    },
+    {
+      "name": "x0",
+      "norm": {
+        "linf_exact": 1
+      },
+      "placement": "ajtai",
+      "rows": 48
+    },
+    {
+      "name": "e",
+      "norm": {
+        "linf_exact": 7
+      },
+      "placement": "ajtai",
+      "rows": 8
+    }
+  ],
+  "requirements": {
+    "alpha_squared": 11392,
+    "approx_alpha_squared": "25064447767756593743016",
+    "l": 26,
+    "l2_bounds_squared": [
+      90803788942
+    ],
+    "l2_rows": [
+      16
+    ],
+    "lifted_moduli": [
+      {
+        "max_integer_coefficient": 503808007,
+        "modulus": 983040
+      },
+      {
+        "max_integer_coefficient": 5187734752006453,
+        "modulus": 1048573
+      }
+    ],
+    "linf_bound": 4947423549,
+    "m1": 89,
+    "max_integer_coefficient": 5187734752006453,
+    "n_bin": 89,
+    "n_prime": 10
+  }
+}

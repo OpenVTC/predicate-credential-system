@@ -1,0 +1,246 @@
+//! The post-quantum (lattice) instantiation of `Π_PCreds` (§5.2.3 and §5.1.3): the shared
+//! foundations of the credential base `Σ-vSIS` ([`crate::pcreds::lattice::base`]), the short-key
+//! tag `Tag_LWR` ([`LWR`](crate::kiprf::LWR)) and the lattice backend
+//! ([`crate::pcreds::lattice`]). Feature `lattice`.
+//!
+//! | paper | here |
+//! |---|---|
+//! | `R_q = Z_q[X]/(X^d + 1)`, `d = 1024`, `q = 1,048,573` (§5.2.3, "Parameters") | [`Rq`] (arithmetic by `ntru-trapdoor`) |
+//! | short messages `usk`, `x_0`, `x_1` with `‖·‖_∞ ≤ 1` | [`Ternary`] |
+//! | the tag set R `(γ, p, q_t, m) = (15, 2^16, 983,040, 168)`, the norm bounds, `⌊β_s²⌋` | the constants of this module |
+//! | the issuance cap `Q_max = 2^48` (§5.2.3, "Issuance cap") | [`Q_MAX`] |
+//! | `H_mat`, and `H_id`, `H_req` of the protocol by `H_mat` under their labels (§5.1.3, "Random oracles") | [`oracles`] |
+//! | the argument system: Jali's parameter sets for `R_Tag`, `R_att`, `R_iss` and `R_Possess` | [`sets`] |
+//! | the online simulation-extractable NIZK (Def. `def:nizk`) | Jali's straight-line extractable mode, or plain Fiat–Shamir with the feature `lattice-plain` ([`STRAIGHT_LINE`]) |
+//!
+//! # Fixed parameters
+//!
+//! One parameter set, the 128-bit set of docs/design-notes.md (tag set R, proof degree 128,
+//! `β_r = 1`): ring degree $`d = n = 1024`$, ring modulus $`q = 2^{20} - 3`$ (prime,
+//! $`\equiv 5 \bmod 8`$), NTRU width $`w = 2`$ ($`A = [1 \mid h]`$), $`\ell_r = 3`$,
+//! $`\beta_u = \beta_x = \beta_r = 1`$, $`\lfloor\beta_s^2\rfloor = 90{,}803{,}788{,}942`$, and the
+//! short-key LWR tag with $`\gamma = 15`$, $`p = 2^{16}`$, $`q_t = \gamma p = 983{,}040`$,
+//! $`m = 168`$ (the smallest $`m`$ of lem:tag-lwr-short at $`\lambda = 128`$), whose rounding
+//! errors are bounded EXACTLY by $`\lfloor\gamma/2\rfloor = 7`$ (rem:relaxed-extraction). The
+//! Jali parameter sets in [`sets`] were derived for exactly these values and for exactly the
+//! statement layouts of the lattice backend; changing any constant here means deriving new sets.
+//! With $`\ell_r = 3`$ ternary components the request is pseudorandom under MLWE with a wide
+//! margin; $`\ell_r = 2`$ leaves under three bits above 128 ([`crate::pcreds::lattice::base`],
+//! "What the paper asks of the parameters").
+//!
+//! # Randomness
+//!
+//! Every randomized algorithm takes the crate's `rng: &mut R` (rand 0.8). Jali and
+//! `ntru-trapdoor` take 32-byte seeds instead; each call gets a FRESH seed drawn from the caller's
+//! RNG (`fresh_seed`), never reused: one per Jali proof (the multi-theorem zero-knowledge bound
+//! assumes it), one per `SampPre` call ("fresh coins in every call", §6.2.3, "The
+//! implemented preimage sampler"), one per `TrapGen`.
+//!
+//! # Side channels
+//!
+//! Performance comes first. The ring arithmetic of `ntru-trapdoor` uses masks, and `SampPre`
+//! keeps fn-dsa's isochronous sampler structure, but `SampPre`'s floating-point arithmetic and
+//! rejection loops, key generation and all of Jali (arithmetic, sampling, rejection, decoding)
+//! run in variable time.
+
+pub mod oracles;
+pub mod ring;
+pub mod sets;
+pub(crate) mod xof;
+
+use ark_std::rand::{CryptoRng, RngCore};
+use zeroize::Zeroizing;
+
+pub use self::ring::{Rq, Ternary};
+use crate::error::Error;
+
+/// The ring degree $`d`$ of $`R_q`$, which is also the dimension $`n`$ of the tag key (the
+/// coefficient vector of `usk`).
+pub const D: usize = 1024;
+/// The prime ring modulus $`q = 2^{20} - 3 = 1{,}048{,}573 \equiv 5 \bmod 8`$:
+/// $`X^{1024} + 1`$ splits into two irreducible factors of degree 512 modulo $`q`$.
+pub const Q: u32 = 1_048_573;
+/// The odd rounding ratio $`\gamma = q_t / p`$ of the tag.
+pub const GAMMA: u32 = 15;
+/// The tag output modulus $`p = 2^{16}`$. Tag entries are `u16`: every encoding is canonical,
+/// so `ValidTag` is an invariant of the type [`LWRTag`](crate::kiprf::lwr::LWRTag).
+pub const P: u32 = 1 << 16;
+/// The composite tag modulus $`q_t = \gamma p = 983{,}040`$ (written $`q`$ in
+/// sec:inst-tag-lwr).
+pub const Q_T: u32 = GAMMA * P;
+/// The number $`m`$ of tag rows: the smallest $`m`$ with
+/// $`m\log\psi \ge n\log(4\beta_u + 1) + \lambda`$, $`\psi = q_t/(4\lfloor\gamma/2\rfloor + 2\beta_u)`$,
+/// at $`\lambda = 128`$ (lem:tag-lwr-short): $`\psi = 2^{15}`$, $`m \ge 2505.65/15`$.
+pub const M: usize = 168;
+/// The EXACT bound $`\lfloor\gamma/2\rfloor = (\gamma - 1)/2 = 7`$ on the rounding errors of the
+/// tag clauses (rem:relaxed-extraction, lem:tag-lwr-determinism).
+pub const E_BOUND: u64 = (GAMMA as u64 - 1) / 2;
+/// $`\beta_u`$: `usk` is uniform on $`\{-1, 0, 1\}^n`$.
+pub const BETA_U: u64 = 1;
+/// $`\beta_x`$: the signing randomness $`x_1`$ is uniform on $`\{-1, 0, 1\}^d`$.
+pub const BETA_X: u64 = 1;
+/// $`\beta_r`$: each component of $`x_0`$ is uniform on $`\{-1, 0, 1\}^d`$.
+pub const BETA_R: u64 = 1;
+/// $`\ell_r`$, the number of components of $`x_0`$ (and of $`B_r`$).
+pub const ELL_R: usize = 3;
+/// $`\lfloor\beta_s^2\rfloor = \lfloor\varsigma^2 \cdot 2d\rfloor = 90{,}803{,}788{,}942`$: the
+/// exact bound on $`\|s\|^2`$ of `Verify`, of the possession relation and of `SampPre`.
+pub const S_BOUND: u64 = 90_803_788_942;
+/// The degree of Jali's proof ring.
+pub const PROOF_DEGREE: usize = 128;
+/// The degree of the subring elements that hold a rounding-error vector $`e \in \mathbb Z^m`$ in
+/// the statements: the proof degree.
+pub const E_DEG: usize = PROOF_DEGREE;
+/// The number $`\lceil m / e_{\deg}\rceil = 2`$ of subring elements per rounding-error vector.
+pub const E_COUNT: usize = M.div_ceil(E_DEG);
+/// The issuance cap $`Q_{\max} = 2^{48}`$: the number of `SampPre` calls (`BlindIssue`) that one
+/// helper key answers (§6.2.3, "Issuance cap"). The helper then rotates its key.
+pub const Q_MAX: u64 = 1 << 48;
+/// The Jali release this crate is built against and pins exactly (`Cargo.toml`). It enters the
+/// digest of the lattice `pp`: Jali promises no stability of its proof encoding or transcripts.
+pub const JALI_VERSION: &str = "0.3.0";
+/// Whether the lattice proofs of this build are straight-line extractable: Jali's extractable
+/// mode (Katsumata's transform, CRYPTO 2021, in the classical random-oracle model) by default,
+/// plain Fiat–Shamir with the feature `lattice-plain` unless `lattice-extractable` overrides it.
+///
+/// In the extractable mode every proof also commits to its witness with an extractable linear
+/// homomorphic commitment, under a key that the random oracle outputs on the parameters, the
+/// extraction set ([`sets::ExtractionSets`]), the context and the statement. An extractor that
+/// programs the oracle with keys it holds trapdoors for recovers the witness from a single
+/// proof, without rewinding, also after simulated proofs, for every proof whose statement and
+/// context received none. Jali's security
+/// notes give this argument as an outline with the status of each step, and claim nothing in the
+/// quantum random-oracle model. The proofs are 5.6 to 7.1 times as long ([`sets`]). The choice
+/// enters the digest of the lattice `pp`, so the two builds refuse each other's parameters and
+/// proofs.
+pub const STRAIGHT_LINE: bool =
+    cfg!(feature = "lattice-extractable") || !cfg!(feature = "lattice-plain");
+
+// The constants are consistent with each other and with the layouts the parameter sets were
+// derived for.
+const _: () = {
+    assert!(Q_T == 983_040 && GAMMA % 2 == 1);
+    assert!(E_BOUND == 7);
+    assert!(
+        P == 1 << 16,
+        "tags are u16: ValidTag is then a type invariant"
+    );
+    assert!(D.is_multiple_of(E_DEG) && E_DEG.is_multiple_of(PROOF_DEGREE));
+    assert!(E_COUNT * E_DEG >= M && (E_COUNT - 1) * E_DEG < M);
+    assert!(E_COUNT == 2);
+};
+
+/// A fresh, secret, uniform 32-byte seed from the caller's RNG, in a buffer that is wiped on
+/// drop: the seed bridge from the crate's rand-0.8 RNG to the seeded entry points of Jali
+/// (`Compiled::prove_bytes_with_seed`) and of `ntru-trapdoor` (`trapgen`, `samp_pre`). Draw one
+/// per call and never reuse it.
+pub(crate) fn fresh_seed<R: RngCore + CryptoRng + ?Sized>(rng: &mut R) -> Zeroizing<[u8; 32]> {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    rng.fill_bytes(&mut *seed);
+    seed
+}
+
+/// Maps an error of Jali to this crate's [`Error`]:
+///
+/// | Jali | here |
+/// |---|---|
+/// | `Witness` (the honest prover's witness check) | [`Error::WitnessDoesNotSatisfyRelation`] |
+/// | `InvalidProof`, `Encoding` (a verifier's rejection) | [`Error::InvalidProof`] |
+/// | anything else (`Parameter`, `Dimension`, `Overflow`, `Index`, `RingMismatch`, `Randomness`, `RestartLimit`) | [`Error::LatticeBackend`] |
+///
+/// `RestartLimit` (4096 rejected attempts of the prover) is retried with a fresh seed by the
+/// caller before it is mapped.
+pub(crate) fn jali_error(error: jali::Error) -> Error {
+    match error {
+        jali::Error::Witness => Error::WitnessDoesNotSatisfyRelation,
+        jali::Error::InvalidProof | jali::Error::Encoding => Error::InvalidProof,
+        other => Error::LatticeBackend(format!("jali: {other}")),
+    }
+}
+
+/// Maps an error of `ntru-trapdoor` to this crate's [`Error`]: a malformed encoding is
+/// [`Error::Serialization`], an inconsistent trapdoor is [`Error::InvalidKey`], and anything
+/// else (`SampPreExhausted`, `KeygenExhausted`, `InvalidParams`, `Mismatch`, `NotInvertible`) is
+/// [`Error::LatticeBackend`].
+pub(crate) fn ntru_error(error: ntru_trapdoor::Error) -> Error {
+    match error {
+        ntru_trapdoor::Error::InvalidLength | ntru_trapdoor::Error::InvalidEncoding => {
+            Error::Serialization(format!("ntru-trapdoor: {error}"))
+        }
+        ntru_trapdoor::Error::InvalidKey | ntru_trapdoor::Error::LeafOutOfRange => {
+            Error::InvalidKey
+        }
+        other => Error::LatticeBackend(format!("ntru-trapdoor: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand::{SeedableRng, rngs::StdRng};
+
+    use super::*;
+
+    /// The constants agree with `ntru-trapdoor`'s PCS set and with lem:tag-lwr-short.
+    #[test]
+    fn constants_agree_with_the_trapdoor_set_and_the_lemma() {
+        let ntru = ntru_trapdoor::Params::PCS;
+        assert_eq!(ntru.n(), D);
+        assert_eq!(ntru.q, Q);
+        assert_eq!(ntru.beta_sq, S_BOUND);
+        assert_eq!(ntru.rq_bytes(), Rq::BYTES);
+        // lem:tag-lwr-short at λ = 128, with the honest bounds (β_u, ⌊γ/2⌋): ψ = q_t / 30 = 2^15
+        let psi = f64::from(Q_T) / (4.0 * E_BOUND as f64 + 2.0 * BETA_U as f64);
+        assert_eq!(psi, 32768.0);
+        let rhs = D as f64 * (4.0 * BETA_U as f64 + 1.0).log2() + 128.0;
+        let m = (rhs / psi.log2()).ceil() as usize;
+        assert_eq!(m, M);
+        assert!((M - 1) as f64 * psi.log2() < rhs);
+    }
+
+    /// `JALI_VERSION` is the release that `Cargo.toml` pins exactly.
+    #[test]
+    fn jali_version_is_the_pinned_release() {
+        let manifest = include_str!("../../Cargo.toml");
+        let pin = format!("version = \"={JALI_VERSION}\"");
+        assert!(
+            manifest
+                .lines()
+                .any(|line| line.starts_with("jali ") && line.contains(&pin))
+        );
+    }
+
+    /// One seed per call: consecutive seeds differ.
+    #[test]
+    fn fresh_seeds_differ() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let a = fresh_seed(&mut rng);
+        let b = fresh_seed(&mut rng);
+        assert_ne!(*a, *b);
+    }
+
+    #[test]
+    fn errors_map_as_documented() {
+        assert_eq!(
+            jali_error(jali::Error::Witness),
+            Error::WitnessDoesNotSatisfyRelation
+        );
+        assert_eq!(jali_error(jali::Error::InvalidProof), Error::InvalidProof);
+        assert_eq!(jali_error(jali::Error::Encoding), Error::InvalidProof);
+        assert!(matches!(
+            jali_error(jali::Error::RestartLimit),
+            Error::LatticeBackend(_)
+        ));
+        assert!(matches!(
+            ntru_error(ntru_trapdoor::Error::InvalidEncoding),
+            Error::Serialization(_)
+        ));
+        assert_eq!(
+            ntru_error(ntru_trapdoor::Error::InvalidKey),
+            Error::InvalidKey
+        );
+        assert!(matches!(
+            ntru_error(ntru_trapdoor::Error::SampPreExhausted),
+            Error::LatticeBackend(_)
+        ));
+    }
+}

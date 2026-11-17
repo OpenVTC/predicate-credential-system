@@ -1,0 +1,11 @@
+x0 = H_mat(hid || sha256('x_0 of the known answers')): first 4 = [496402, 514285, 814601, 373056], entry[1024] = 631574, last = 159920, sum mod 2^32 = 2864530562, sha256(to_bytes) = 83c01a4e4e6c40c17e20fbd030a2bfe853def93ca4d74d9cbcecf411bae4cb03
+H_mat(input = empty): first 4 = [545446, 401439, 109968, 657601], entry[1024] = 528570, last = 564259, sum mod 2^32 = 3107952684, sha256(to_bytes) = eb1b192a6fba3de658597381af2f5d64b41b9214bb81a0a5d40eabeece90783d
+x0 = H_mat(hid || 00..1f): first 4 = [24050, 949323, 677267, 672253], entry[1024] = 285799, last = 385935, sum mod 2^32 = 2967721726, sha256(to_bytes) = 28dda871f4c553e056bd375f7fedd48bf85e6537bd3acc0cf1d928162754e408
+x_Q = H_mat(req || 00..1f): first 4 = [428025, 418361, 942340, 678679], entry[1024] = 105245, last = 615441, sum mod 2^32 = 2927140858, sha256(to_bytes) = 79f2ea330ea17730f898ebf167ab8aed56ec61870aac328a71b7ff534e74b9cf
+x0 under deployment PCS-LATTICE-KAT2: first 4 = [531995, 678842, 870265, 822108], entry[1024] = 475009, last = 276185, sum mod 2^32 = 2856260866, sha256(to_bytes) = 4296e8dc03ab533d2dc61675af5d0fcc319307f03dad728c25c61fdbe87db836
+kat key: counts (-1, 0, 1) = [348, 328, 348] first 8 = [-1, -1, 1, -1, 1, 1, 1, 1]
+id = Tag(K, x0): first 8 = [40124, 45340, 45497, 37072, 39407, 5796, 34078, 41901], last = 41524, sha256(<id>) = 8be2ced09c3f47fadf4110f242dd1c0aa7bd4ea01f53022ff836e210c2daf227
+e0: first 8 = [-7, -7, 6, -2, 0, -2, -5, 3], sum = -34, sum of squares = 2858
+x_Q = H_mat(req || sha256('x_Q of the known answers')): first 4 = [660069, 503211, 256051, 178542], entry[1024] = 814747, last = 446670, sum mod 2^32 = 2934527322, sha256(to_bytes) = c1b4d631b87ce0e44f7f39c7e3f2676670838e134a2ce7ab0bf05b987f11a262
+t = Tag(K, x_Q): first 8 = [59292, 62291, 39066, 48753, 3332, 31645, 28896, 21133], last = 51009, sha256(<t>) = 3a937362c115c7d96bfc64ac7da6514fc75d4d34e22ce018666e5af823fd669c
+e1: first 8 = [6, 2, 2, -1, 6, -1, -6, 4], sum = 97, sum of squares = 3037

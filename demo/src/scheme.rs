@@ -1,19 +1,25 @@
-//! The instantiation and the labels (design §13 C1).
+//! The instantiation and the labels.
 //!
-//! - ONE deployment label per community, with no epoch in it: `pp`, and so every applicant's
-//!   `id`, is fixed for the life of the community.
-//! - ONE long-lived helper key `hvk`; it rotates only on compromise.
-//! - The epoch is in the CLASS label of the vetter root predicate, `vetter/<period>`. The
-//!   helper's AllowList holds the live labels, so one proof may mix epochs.
-//! - Tokens use a separate deployment label and key (never `hvk`), with the period in the token
-//!   label `token/<period>` or `token/event/<id>`.
+//! - ONE deployment label per community, with no period in it: `pp` is fixed for the life of
+//!   the community.
+//! - ONE helper key per vetter period, the "epoch rotation of `(hvk, hsk)`" of design §4.3.
+//!   §13 C1 replaced it with class labels `vetter/<period>` under one long-lived key, but
+//!   `pcreds` has no class labels, and every identifier and tag is a function of the helper key
+//!   (`x_0 = H_id(⟨hvk⟩)`, `x_Q = H_req(⟨pp, hvk, id_Q, j_Q⟩)`). So a period is a key: a vetter
+//!   holds one credential per period, an applicant registers under one period, and the VTC
+//!   evaluates a request under that period's key alone. The current and the previous period are
+//!   live.
+//! - Tokens use one key per label, `token/<period>` or `token/event/<id>`, never a helper key
+//!   (module `token`).
 
 use ark_bls12_381::{Bls12_381, G1Projective};
 use predicate_credential_system::{
-    cred::PS,
     hash::bls12_381::G1Hasher,
     kiprf::DDH,
-    pcs::{AllowList, PCS, Predicate},
+    pcreds::{
+        Protocol,
+        pairing::{PS, PairingBackend},
+    },
     serialization::{to_bytes, to_multibase},
 };
 
@@ -22,31 +28,16 @@ use crate::ProtoError;
 pub type E = Bls12_381;
 pub type G1 = G1Projective;
 pub type Fr = ark_bls12_381::Fr;
-/// `Σ-PS`: the paper's main instantiation, and the base the tokens reuse.
-pub type Base = PS<E>;
-pub type Tag = DDH<G1, G1Hasher>;
-/// The scheme with the default policy: for users, and for deriving `pp`.
-pub type Open = PCS<E, Base, Tag>;
-/// The scheme as the helper runs it: never with the default policy.
-pub type Helper = PCS<E, Base, Tag, AllowList<Fr>>;
+/// `Tag_DDH` over `G_1`: identifiers and attestation tags.
+pub type TagDdh = DDH<G1, G1Hasher>;
+/// `Σ-PS` with `Tag_DDH` over BLS12-381: the paper's main pairing instantiation. The tokens
+/// reuse its credential base `Σ-PS`.
+pub type Bk = PairingBackend<E, PS, TagDdh>;
+/// `Π_PCreds` for [`Bk`], under the community's deployment label.
+pub type Pcreds = Protocol<Bk>;
 
 pub fn deployment_label(community: &str) -> Vec<u8> {
     format!("{community}#vetting-pcs").into_bytes()
-}
-
-pub fn token_deployment_label(community: &str) -> Vec<u8> {
-    format!("{community}#vetting-token").into_bytes()
-}
-
-/// The vetter root predicate for one epoch.
-pub fn vetter_predicate(period: &str) -> Predicate {
-    Predicate::root(format!("vetter/{period}").into_bytes())
-}
-
-/// The verify-only applicant predicate: `n` distinct vetters (§13 C4: any `n`, because the VTC
-/// never issues under it).
-pub fn hidden_vetting_predicate(n: u32) -> Predicate {
-    Predicate::new(n, b"hidden-vetting".to_vec())
 }
 
 pub fn monthly_token_label(period: &str) -> String {

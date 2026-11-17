@@ -42,7 +42,11 @@ jobs:
       # Scoped to the library: `demo/` pulls in vta-sdk's whole dependency tree
       # (trust-tasks-rs, dtg-credentials, reqwest/rustls, ...), which would make every
       # PR pay for compiling it. See the `test` job below.
+      # `--all-features` includes `lattice-extractable`, which overrides `lattice-plain`, so it
+      # lints the default, straight-line extractable lattice build, and the second run lints the
+      # plain one.
       - run: cargo clippy -p predicate-credential-system --all-targets --all-features -- -D warnings
+      - run: cargo clippy -p predicate-credential-system --all-targets --features serde,jali,lattice-plain,parallel,test-utils -- -D warnings
 
   test:
     name: Test
@@ -61,9 +65,11 @@ jobs:
       # crate nothing here publishes or ships. Run `cargo test -p pcs-vetting-prototype`
       # locally (see demo/README.md) before changing `demo/`.
       - run: cargo test -p predicate-credential-system --all-features --all-targets
+      # The same suite in the plain lattice build.
+      - run: cargo test -p predicate-credential-system --features lattice-plain
 
   # `default = []`, so this is the only job that ever builds the library with
-  # no features at all; the dev-dependency on itself (test-utils + serde)
+  # no features at all; the dev-dependency on itself (test-utils, serde, jali and lattice)
   # means the test targets always pull those in regardless of this flag. Scoped to the library:
   # `demo/` has no features of its own.
   no-default-features:
@@ -92,7 +98,9 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo doc --no-deps -p predicate-credential-system --features serde
+      # The features docs.rs documents, and the plain lattice build.
+      - run: cargo doc --no-deps -p predicate-credential-system --features serde,jali,lattice
+      - run: cargo doc --no-deps -p predicate-credential-system --features serde,jali,lattice-plain
 
   # The published crate's MSRV commitment; `demo/` (never published) is not held to it.
   msrv:
@@ -121,3 +129,23 @@ jobs:
           rustup default stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo package -p predicate-credential-system --locked
+
+  # The lattice backend end to end at k = 1 with real Jali proofs (seconds and up to about
+  # 0.7 GB each), in release, in the default extractable and in the plain build, and the check
+  # that each build proves and verifies in its own mode only. The other heavy lattice suites
+  # are `#[ignore]`d and run by hand (README, "Building and testing").
+  lattice:
+    name: Lattice
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: cargo test -p predicate-credential-system --locked --release --features lattice --test lattice_protocol quick_end_to_end_k1
+      - run: cargo test -p predicate-credential-system --locked --release --features lattice --lib proofs_are_in_the_mode_of_the_build
+      - run: cargo test -p predicate-credential-system --locked --release --features lattice-plain --test lattice_protocol quick_end_to_end_k1
+      - run: cargo test -p predicate-credential-system --locked --release --features lattice-plain --lib proofs_are_in_the_mode_of_the_build

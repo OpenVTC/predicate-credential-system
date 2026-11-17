@@ -1,5 +1,5 @@
-//! Criterion benchmarks and object sizes of the key-injective PRF instantiations (§3.1):
-//! `Tag_DDH` (§3.1.1) and `Tag_DY` (§3.1.2) over `G_1` of BLS12-381.
+//! Criterion benchmarks and object sizes of the key-injective PRF instantiations (§6.1):
+//! `Tag_DDH` (§6.1.1) and `Tag_DY` (§6.1.2) over `G_1` of BLS12-381.
 //!
 //! ```text
 //! cargo bench --bench kiprf
@@ -11,12 +11,12 @@
 //! | id | algorithm | includes |
 //! |---|---|---|
 //! | `keygen` | `TagKeyGen` | one scalar (`Tag_DDH`: non-zero) |
-//! | `eval` | `TagEval(K, s)` at an ordinary point | `Tag_DDH`: `H_2(s)` (hash to the curve) and one scalar multiplication; `Tag_DY`: one field inversion and one scalar multiplication |
-//! | `eval_identity_point` | `TagEval(K, c_0)`, the identifier `id` of the construction | `Tag_DDH`: `H_2(c_0) = g_1` is programmed, so no hashing |
-//! | `valid_tag` | `ValidTag(T, s)` | a non-identity test |
-//! | `prove_tag` | stand-alone Fiat-Shamir proof for `R_Tag` | building the clause (`Tag_DDH`: `H_2(s)` again), one commitment, one response |
-//! | `verify_tag` | its verifier | `ValidTag`, the clause, recomputing the commitment |
-//! | `h2` (`Tag_DDH` only) | `H_2(s)` alone | the hash-to-curve suite of RFC 9380 |
+//! | `eval` | `TagEval(K, x)` at an ordinary point | `Tag_DDH`: `H_2(x)` (hash to the curve) and one scalar multiplication; `Tag_DY`: one field inversion and one scalar multiplication |
+//! | `eval_identity_point` | `TagEval(K, x_0)`, the identifier `id` of the protocol | the same work at the identifier point |
+//! | `valid_tag` | `t ∈ T` | a non-identity test |
+//! | `prove_tag` | stand-alone Fiat-Shamir proof for `R_Tag` (the protocol's `π_id`) | building the clause (`Tag_DDH`: `H_2(x)` again), one commitment, one response |
+//! | `verify_tag` | its verifier | `t ∈ T`, the clause, recomputing the commitment |
+//! | `h2` (`Tag_DDH` only) | `H_2(x)` alone | the hash-to-curve suite of RFC 9380 |
 //!
 //! Inputs are seeded, so every run benchmarks the same values. Timings depend on the machine,
 //! the compiler and the enabled features: record them with `rustc --version` and the commit.
@@ -30,14 +30,14 @@ use ark_ff::UniformRand;
 use ark_serialize::CanonicalSerialize;
 use criterion::Criterion;
 use predicate_credential_system::{
-    hash::{bls12_381::G1Hasher, h0_identity_point},
-    kiprf::{self, PCSTag, prove_tag, verify_tag},
+    hash::{Transcript, bls12_381::G1Hasher},
+    kiprf::{self, ProtocolTag, prove_tag, verify_tag},
 };
 use rand::{SeedableRng, rngs::StdRng};
 
 type G1 = G1Projective;
 type DDH = kiprf::DDH<G1, G1Hasher>;
-type DY = kiprf::DY<G1>;
+type DY = kiprf::DY<G1, G1Hasher>;
 
 const DOMAIN: &[u8] = b"bench/kiprf";
 const CTX: &[u8] = b"bench/kiprf/ctx";
@@ -45,23 +45,26 @@ const CTX: &[u8] = b"bench/kiprf/ctx";
 /// One instantiation: its key, an ordinary evaluation point with its tag, and a tag proof.
 struct Instance<T> {
     tag: T,
-    c0: Fr,
+    x0: Fr,
     key: Fr,
     s: Fr,
     t: G1,
 }
 
-fn instance<T: PCSTag<G1>>(seed: u64) -> Instance<T> {
+fn instance<T: ProtocolTag<G1>>(seed: u64) -> Instance<T> {
     let mut rng = StdRng::seed_from_u64(seed);
-    let c0: Fr = h0_identity_point(DOMAIN);
-    let tag = T::setup(DOMAIN, c0).expect("tag parameters");
+    // a fixed evaluation point, standing for an identifier point x_0 = H_id(⟨hvk⟩)
+    let mut transcript = Transcript::new(b"/BENCH-POINT");
+    transcript.append_bytes(b"deployment", DOMAIN);
+    let x0: Fr = transcript.challenge_scalar();
+    let tag = T::setup(DOMAIN).expect("tag parameters");
     let key = tag.keygen(&mut rng);
     let s = Fr::rand(&mut rng);
     let t = tag.eval(&key, &s).expect("defined evaluation");
-    Instance { tag, c0, key, s, t }
+    Instance { tag, x0, key, s, t }
 }
 
-fn print_sizes<T: PCSTag<G1>>(name: &str, seed: u64) {
+fn print_sizes<T: ProtocolTag<G1>>(name: &str, seed: u64) {
     let mut rng = StdRng::seed_from_u64(seed ^ 0xffff);
     let i = instance::<T>(seed);
     let proof = prove_tag(&i.tag, &i.key, &i.t, &i.s, CTX, &mut rng).expect("tag proof");
@@ -78,7 +81,7 @@ fn print_sizes<T: PCSTag<G1>>(name: &str, seed: u64) {
     }
 }
 
-fn bench_tag<T: PCSTag<G1>>(c: &mut Criterion, name: &str, seed: u64) {
+fn bench_tag<T: ProtocolTag<G1>>(c: &mut Criterion, name: &str, seed: u64) {
     let mut rng = StdRng::seed_from_u64(seed ^ 0xffff);
     let i = instance::<T>(seed);
     let proof = prove_tag(&i.tag, &i.key, &i.t, &i.s, CTX, &mut rng).expect("tag proof");
@@ -89,7 +92,7 @@ fn bench_tag<T: PCSTag<G1>>(c: &mut Criterion, name: &str, seed: u64) {
         b.iter(|| i.tag.eval(black_box(&i.key), black_box(&i.s)));
     });
     group.bench_function("eval_identity_point", |b| {
-        b.iter(|| i.tag.eval(black_box(&i.key), black_box(&i.c0)));
+        b.iter(|| i.tag.eval(black_box(&i.key), black_box(&i.x0)));
     });
     group.bench_function("valid_tag", |b| {
         b.iter(|| i.tag.valid_tag(black_box(&i.t), black_box(&i.s)));

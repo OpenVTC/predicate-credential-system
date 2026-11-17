@@ -1,5 +1,6 @@
 //! End to end, one test per claim of the design (`design-docs/vetting-hidden-vetters-pcs.md`),
-//! adversarial cases included. Counting is VTI's own `requirements::evaluate`, unchanged.
+//! adversarial cases included, on `pcreds` (README, "Changes for `pcreds`"). Counting is VTI's
+//! own `requirements::evaluate`, unchanged.
 
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use pcs_vetting_prototype::{
@@ -57,7 +58,7 @@ fn world(seed: u64, n: usize) -> World {
     for i in 0..n {
         let member = format!("member-{i}");
         vtc.grant(&member);
-        let mut v = VetterEngine::new(&member, &vtc, &mut rng).unwrap();
+        let mut v = VetterEngine::new(&member);
         v.enroll(&mut vtc, &mut rng).unwrap();
         let label = vtc.current_token_label().to_string();
         v.drip(&mut vtc, 1, &label, R, &mut rng).unwrap();
@@ -86,12 +87,16 @@ fn meta(app: &ApplicantEngine, vtc: &Vtc, method: VettingMethod) -> StatementMet
     )
 }
 
-/// One vetting session: accept (reserves a token), human check, attest.
+/// One vetting session: the applicant's request, accept (reserves a token), human check,
+/// attest.
 fn vet(w: &mut World, j: usize, app: &ApplicantEngine, method: VettingMethod) -> HiddenAttestation {
     let m = meta(app, &w.vtc, method);
+    let request = app
+        .vetting_request(&w.vtc, &w.vetters[j].member, &mut w.rng)
+        .unwrap();
     let r = w.vetters[j].accept(None, 2).unwrap();
     w.vetters[j]
-        .attest(&w.vtc, &r, app.id(), m, &mut w.rng)
+        .attest(&w.vtc, &r, &request, m, &mut w.rng)
         .unwrap()
 }
 
@@ -120,12 +125,14 @@ fn admits_on_two_hidden_vetters_and_names_none() {
     let facts = serde_json::to_string(&d.statements).unwrap();
     for v in &w.vetters {
         assert!(!facts.contains(&v.member), "facts leak {}", v.member);
-        assert!(!facts.contains(&point_text(v.id()).unwrap()));
+        for id in v.ids() {
+            assert!(!facts.contains(&point_text(id).unwrap()));
+        }
     }
     assert!(
         d.statements
             .iter()
-            .all(|s| s.issuer.starts_with('z') && s.counted)
+            .all(|s| s.issuer.starts_with('z') && s.verified && s.counted)
     );
 }
 
@@ -193,8 +200,9 @@ fn a_double_spent_token_does_not_count() {
 
     // A cheating vetter reuses Alice's spent token for Bob.
     let m = meta(&bob, &w.vtc, VettingMethod::InPerson);
+    let request = bob.vetting_request(&w.vtc, "member-0", &mut w.rng).unwrap();
     let cheat = w.vetters[0]
-        .attest_with_token(&w.vtc, "2026-09", reused, bob.id(), m, &mut w.rng)
+        .attest_with_token(&w.vtc, reused, &request, m, &mut w.rng)
         .unwrap();
     bob.receive(&w.vtc, cheat).unwrap(); // the signature itself is valid
     let honest = vet(&mut w, 1, &bob, VettingMethod::Video);
@@ -238,13 +246,14 @@ fn tokens_and_metadata_cannot_move_between_attestations() {
             .all(|s| s.failures.contains(&"token-mismatch".to_string()))
     );
 
-    // Swap the metadata too (claim "inPerson" for the video vetter): the proof breaks.
+    // Swap the metadata too (claim "inPerson" for the video vetter): `π_iss` is bound to the
+    // metadata of every statement in order, and the request breaks.
     let c = w.vtc.challenge(&mut w.rng);
     let mut sub = bob.submit(&w.vtc, &c, &mut w.rng).unwrap();
     sub.statements.swap(0, 1);
     assert_eq!(
         w.vtc.submit(&sub, now()).err(),
-        Some(ProtoError::ProofRejected(PcsError::InvalidAttestation))
+        Some(ProtoError::ProofRejected(PcsError::InvalidProof))
     );
 }
 
@@ -262,7 +271,7 @@ fn a_challenge_is_single_use_and_bound_to_the_proof() {
         Some(ProtoError::BadChallenge)
     );
 
-    // A proof made for one challenge does not verify under another.
+    // A request made for one challenge does not verify under another (it is the `ssid`).
     let c2 = w.vtc.challenge(&mut w.rng);
     let mut replay = sub.clone();
     replay.challenge = c2;
@@ -270,7 +279,7 @@ fn a_challenge_is_single_use_and_bound_to_the_proof() {
         w.vtc.submit(&replay, now()).err(),
         Some(ProtoError::ProofRejected(PcsError::InvalidProof))
     );
-    // ... nor for another join DID (the id binding is in app_0).
+    // ... nor for another join DID (the id binding is in the proof context).
     let c3 = w.vtc.challenge(&mut w.rng);
     let mut other = bob.submit(&w.vtc, &c3, &mut w.rng).unwrap();
     other.join_did = "did:example:mallory".into();
@@ -303,46 +312,92 @@ fn a_closed_token_label_means_no_token() {
 }
 
 #[test]
-fn rotation_mixes_epochs_in_one_proof_and_refresh_keeps_the_tag() {
+fn an_application_lives_in_one_period_and_is_refreshed_across_a_rotation() {
     let mut w = world(8, 3);
     let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
-    let old = vet(&mut w, 0, &bob, VettingMethod::InPerson);
-    let old_tag = old.attestation.tag;
-    bob.receive(&w.vtc, old).unwrap();
+    assert_eq!(bob.period(), "2026-09");
+    let a = vet(&mut w, 0, &bob, VettingMethod::InPerson);
+    let old = a.clone();
+    bob.receive(&w.vtc, a).unwrap();
 
-    // Rotate: 2026-10 is current, 2026-09 still live. Vetter 1 re-enrols and gets new tokens.
-    w.vtc.rotate("2026-10").unwrap();
-    w.vetters[1].enroll(&mut w.vtc, &mut w.rng).unwrap();
+    // Rotate: 2026-10 is current, 2026-09 still live. Vetters 0 and 1 enrol under 2026-10 and
+    // draw its tokens. Vetter 1 still holds its 2026-09 credential and vets Bob under his
+    // period, so the application in flight completes.
+    w.vtc.rotate("2026-10", &mut w.rng).unwrap();
     let label = w.vtc.current_token_label().to_string();
-    w.vetters[1]
-        .drip(&mut w.vtc, 31, &label, R, &mut w.rng)
-        .unwrap();
-    let new = vet(&mut w, 1, &bob, VettingMethod::Video);
-    bob.receive(&w.vtc, new).unwrap();
-
-    // One proof over a 2026-09 and a 2026-10 attestation (§13 C1).
+    for j in [0, 1] {
+        w.vetters[j].enroll(&mut w.vtc, &mut w.rng).unwrap();
+        w.vetters[j]
+            .drip(&mut w.vtc, 31, &label, R, &mut w.rng)
+            .unwrap();
+    }
+    let b = vet(&mut w, 1, &bob, VettingMethod::Video);
+    let sessions = [old.session.clone(), b.session.clone()];
+    let old_tags = [old.attestation.tag, b.attestation.tag];
+    bob.receive(&w.vtc, b).unwrap();
     let d = submit(&mut w, &bob).unwrap();
     assert!(d.evaluation.satisfied(), "{:?}", d.evaluation);
 
-    // Vetter 0 re-enrols under 2026-10 and refreshes; 2026-09 then leaves the AllowList.
-    w.vetters[0].enroll(&mut w.vtc, &mut w.rng).unwrap();
-    w.vetters[0]
+    // A vetter enrolled under 2026-10 only cannot vet an application of 2026-09.
+    w.vtc.grant("member-3");
+    let mut newcomer = VetterEngine::new("member-3");
+    newcomer.enroll(&mut w.vtc, &mut w.rng).unwrap();
+    newcomer
         .drip(&mut w.vtc, 31, &label, R, &mut w.rng)
         .unwrap();
-    w.vtc.drop_period("2026-09").unwrap();
-    let refreshed = w.vetters[0].refresh(&w.vtc, bob.id(), &mut w.rng).unwrap();
+    let request = bob.vetting_request(&w.vtc, "member-3", &mut w.rng).unwrap();
+    let r = newcomer.accept(None, 32).unwrap();
+    let m = meta(&bob, &w.vtc, VettingMethod::InPerson);
     assert_eq!(
-        refreshed.attestation.tag, old_tag,
-        "same usk, same tag (§13 C2)"
+        newcomer.attest(&w.vtc, &r, &request, m, &mut w.rng).err(),
+        Some(ProtoError::NoCredentialForPeriod("2026-09".into()))
     );
-    bob.replace(&w.vtc, refreshed).unwrap();
-    let d = submit(&mut w, &bob).unwrap();
+
+    // 2026-09 is dropped: Bob's application under it fails as a whole.
+    let c = w.vtc.challenge(&mut w.rng);
+    let late = bob.submit(&w.vtc, &c, &mut w.rng).unwrap();
+    w.vtc.drop_period("2026-09").unwrap();
+    assert_eq!(
+        w.vtc.submit(&late, now()).err(),
+        Some(ProtoError::PeriodNotLive("2026-09".into()))
+    );
+
+    // Bob registers under 2026-10 and asks his two vetters to refresh the sessions he had: no
+    // new vetting, a fresh token each, and new tags, under a new key and for a new identifier.
+    let mut bob10 = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    assert_eq!(bob10.period(), "2026-10");
+    let mut refreshed = Vec::new();
+    for j in [0, 1] {
+        let request = bob10
+            .vetting_request(&w.vtc, &w.vetters[j].member, &mut w.rng)
+            .unwrap();
+        let att = w.vetters[j]
+            .refresh(&w.vtc, &sessions[j], &request, &mut w.rng)
+            .unwrap();
+        assert_ne!(att.attestation.tag, old_tags[j]);
+        refreshed.push(att.clone());
+        bob10.receive(&w.vtc, att).unwrap();
+    }
+    let d = submit(&mut w, &bob10).unwrap();
     assert!(d.evaluation.satisfied(), "{:?}", d.evaluation);
+    assert_eq!(d.evaluation.distinct_vetters(), 2);
+
+    // A request is evaluated under its period's key alone: an attestation of the old
+    // application, forced into Bob's new request, does not verify there and does not count.
+    let c = w.vtc.challenge(&mut w.rng);
+    let mixed = bob10
+        .submit_attestations(&w.vtc, &c, &[&refreshed[0], &old], &mut w.rng)
+        .unwrap();
+    let d = w.vtc.submit(&mixed, now()).unwrap();
+    let old_id = old.meta.digest().unwrap();
+    let row = d.statements.iter().find(|s| s.id == old_id).unwrap();
+    assert!(!row.verified && !row.counted);
+    assert!(row.failures.contains(&"unverified".to_string()));
     assert_eq!(d.evaluation.distinct_vetters(), 2);
 }
 
 #[test]
-fn a_dropped_period_fails_the_whole_proof() {
+fn a_dropped_period_fails_the_whole_request() {
     let mut w = world(9, 3);
     let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
     let a = vet(&mut w, 0, &bob, VettingMethod::InPerson);
@@ -350,41 +405,76 @@ fn a_dropped_period_fails_the_whole_proof() {
     let c = w.vtc.challenge(&mut w.rng);
     let sub = bob.submit(&w.vtc, &c, &mut w.rng).unwrap();
 
-    w.vtc.rotate("2026-10").unwrap();
+    w.vtc.rotate("2026-10", &mut w.rng).unwrap();
     w.vtc.drop_period("2026-09").unwrap();
     assert_eq!(
         w.vtc.submit(&sub, now()).err(),
-        Some(ProtoError::ProofRejected(PcsError::PolicyRejected))
+        Some(ProtoError::PeriodNotLive("2026-09".into()))
+    );
+    // The current period cannot be dropped: rotate first.
+    assert_eq!(
+        w.vtc.drop_period("2026-10").err(),
+        Some(ProtoError::DropsCurrentPeriod("2026-10".into()))
     );
 }
 
 #[test]
-fn a_member_is_bound_to_one_identifier() {
+fn a_member_holds_one_credential_per_period() {
     let mut w = world(10, 1);
-    // Enrolling again under the same period is refused.
+    // Enrolling again under the same period is refused, and so is a second engine (a twin key)
+    // for the same member.
     assert!(matches!(
         w.vetters[0].enroll(&mut w.vtc, &mut w.rng),
         Err(ProtoError::AlreadyIssued { .. })
     ));
-    // A second key pair for the same member is refused, now and after rotation (C2).
-    let mut twin = VetterEngine::new("member-0", &w.vtc, &mut w.rng).unwrap();
-    w.vtc.rotate("2026-10").unwrap();
-    assert_eq!(
-        twin.enroll(&mut w.vtc, &mut w.rng).err(),
-        Some(ProtoError::IdentifierRebound("member-0".into()))
-    );
+    let mut twin = VetterEngine::new("member-0");
+    assert!(matches!(
+        twin.enroll(&mut w.vtc, &mut w.rng),
+        Err(ProtoError::AlreadyIssued { .. })
+    ));
+    // Under the next period, whichever engine enrols first holds the member's one credential.
+    // The VTC does not link a member's identifiers across periods, and does not need to, as no
+    // request spans two.
+    w.vtc.rotate("2026-10", &mut w.rng).unwrap();
+    twin.enroll(&mut w.vtc, &mut w.rng).unwrap();
+    assert!(matches!(
+        w.vetters[0].enroll(&mut w.vtc, &mut w.rng),
+        Err(ProtoError::AlreadyIssued { .. })
+    ));
     // Without a grant there is no credential.
-    let mut stranger = VetterEngine::new("member-9", &w.vtc, &mut w.rng).unwrap();
+    let mut stranger = VetterEngine::new("member-9");
     assert_eq!(
         stranger.enroll(&mut w.vtc, &mut w.rng).err(),
         Some(ProtoError::NotAVetter("member-9".into()))
     );
-    // A removed vetter gets nothing under the next period.
+
+    // A removed vetter keeps its credential of a live period until that period leaves the
+    // window, gets nothing under the next period, and cannot attest at all once the period is
+    // dropped.
+    let label = w.vtc.current_token_label().to_string();
+    twin.drip(&mut w.vtc, 31, &label, R, &mut w.rng).unwrap();
+    let carol = ApplicantEngine::new(&w.vtc, "did:example:carol", &mut w.rng).unwrap();
+    let early = carol
+        .vetting_request(&w.vtc, "member-0", &mut w.rng)
+        .unwrap();
+    let late = carol
+        .vetting_request(&w.vtc, "member-0", &mut w.rng)
+        .unwrap();
     w.vtc.revoke("member-0");
-    w.vtc.rotate("2026-11").unwrap();
+    w.vtc.rotate("2026-11", &mut w.rng).unwrap();
     assert_eq!(
-        w.vetters[0].enroll(&mut w.vtc, &mut w.rng).err(),
+        twin.enroll(&mut w.vtc, &mut w.rng).err(),
         Some(ProtoError::NotAVetter("member-0".into()))
+    );
+    let r = twin.accept(None, 32).unwrap();
+    let m = meta(&carol, &w.vtc, VettingMethod::InPerson);
+    twin.attest(&w.vtc, &r, &early, m.clone(), &mut w.rng)
+        .unwrap();
+    w.vtc.drop_period("2026-10").unwrap();
+    let r = twin.accept(None, 32).unwrap();
+    assert_eq!(
+        twin.attest(&w.vtc, &r, &late, m, &mut w.rng).err(),
+        Some(ProtoError::PeriodNotLive("2026-10".into()))
     );
 }
 
@@ -395,17 +485,24 @@ fn withdrawal_by_tag_stops_counting_and_cannot_be_forged() {
     let a = vet(&mut w, 0, &bob, VettingMethod::InPerson);
     bob.receive(&w.vtc, a).unwrap();
     let b = vet(&mut w, 1, &bob, VettingMethod::Video);
+    let b_tag = b.attestation.tag;
     bob.receive(&w.vtc, b).unwrap();
     assert!(submit(&mut w, &bob).unwrap().evaluation.satisfied());
 
     // Vetter 2 cannot withdraw vetter 1's statement: its proof is for its own tag.
-    let (tag2, proof2) = w.vetters[2].withdraw(&w.vtc, bob.id(), &mut w.rng).unwrap();
-    let (tag1, proof1) = w.vetters[1].withdraw(&w.vtc, bob.id(), &mut w.rng).unwrap();
-    assert!(!w.vtc.withdraw(bob.id(), &tag1, &proof2).unwrap());
-    assert!(!w.vtc.withdraw(bob.id(), &tag2, &proof1).unwrap() || tag1 == tag2);
+    let period = bob.period().to_string();
+    let (tag2, proof2) = w.vetters[2]
+        .withdraw(&w.vtc, &period, bob.id(), &mut w.rng)
+        .unwrap();
+    let (tag1, proof1) = w.vetters[1]
+        .withdraw(&w.vtc, &period, bob.id(), &mut w.rng)
+        .unwrap();
+    assert_eq!(tag1, b_tag, "the withdrawal names the statement's own tag");
+    assert!(!w.vtc.withdraw(&period, bob.id(), &tag1, &proof2).unwrap());
+    assert!(!w.vtc.withdraw(&period, bob.id(), &tag2, &proof1).unwrap() || tag1 == tag2);
 
     // Vetter 1 withdraws its own: no identity in the notice, only the tag and the proof.
-    assert!(w.vtc.withdraw(bob.id(), &tag1, &proof1).unwrap());
+    assert!(w.vtc.withdraw(&period, bob.id(), &tag1, &proof1).unwrap());
     let d = w.vtc.evaluate(&point_text(bob.id()).unwrap(), now());
     assert!(!d.evaluation.satisfied());
     assert!(
@@ -456,8 +553,8 @@ fn drip_is_once_per_tick_and_reservations_bound_capacity() {
 fn opening_proofs_are_bound_to_their_request() {
     let mut w = world(14, 1);
     let label = w.vtc.current_token_label().to_string();
-    let tvk = w.vtc.tokens.tvk().clone();
-    let mut wallet = TokenWallet::new(COMMUNITY).unwrap();
+    let tvk = w.vtc.tokens.tvk(&label).unwrap().clone();
+    let mut wallet = TokenWallet::new();
     // Proofs made for tick 5, presented for tick 6.
     let reqs = wallet
         .prepare(&tvk, &label, "member-0", 5, 2, &mut w.rng)
@@ -479,14 +576,19 @@ fn event_mode_needs_a_group_an_outside_approver_and_dies_after_the_event() {
     let mut w = world(15, 4);
     let members = ["member-0", "member-1", "member-2"];
     assert!(matches!(
-        w.vtc.approve_event("summit", &members[..2], "admin", 3),
+        w.vtc
+            .approve_event("summit", &members[..2], "admin", 3, &mut w.rng),
         Err(ProtoError::EventRefused(_))
     ));
     assert!(matches!(
-        w.vtc.approve_event("summit", &members, "member-0", 3),
+        w.vtc
+            .approve_event("summit", &members, "member-0", 3, &mut w.rng),
         Err(ProtoError::EventRefused(_))
     ));
-    let event = w.vtc.approve_event("summit", &members, "admin", 3).unwrap();
+    let event = w
+        .vtc
+        .approve_event("summit", &members, "admin", 3, &mut w.rng)
+        .unwrap();
 
     // Outside the group: refused. Inside: served.
     assert!(matches!(
@@ -504,10 +606,13 @@ fn event_mode_needs_a_group_an_outside_approver_and_dies_after_the_event() {
     let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
     for (j, method) in [(0, VettingMethod::InPerson), (1, VettingMethod::Video)] {
         let m = meta(&bob, &w.vtc, method);
+        let request = bob
+            .vetting_request(&w.vtc, &w.vetters[j].member, &mut w.rng)
+            .unwrap();
         let r = w.vetters[j].accept(Some(&event), 3).unwrap();
         assert_eq!(r.label, event);
         let att = w.vetters[j]
-            .attest(&w.vtc, &r, bob.id(), m, &mut w.rng)
+            .attest(&w.vtc, &r, &request, m, &mut w.rng)
             .unwrap();
         bob.receive(&w.vtc, att).unwrap();
     }
@@ -530,4 +635,121 @@ fn event_mode_needs_a_group_an_outside_approver_and_dies_after_the_event() {
             .iter()
             .all(|s| s.failures.contains(&"no-token".to_string()))
     );
+}
+
+// --- review fixes (PR #5) ------------------------------------------------------------------
+
+#[test]
+fn a_root_request_is_bound_to_the_member_that_submits_it() {
+    use pcs_vetting_prototype::vtc::enrolment_ssid;
+    let mut w = world(20, 0);
+    w.vtc.grant("member-a");
+    w.vtc.grant("member-b");
+    // Member A's root request, captured by member B and submitted as B's.
+    let period = w.vtc.current_period().to_string();
+    let hvk = w.vtc.hvk(&period).unwrap().clone();
+    let user = w.vtc.pcreds().register(&hvk, &mut w.rng).unwrap();
+    let ssid = enrolment_ssid(COMMUNITY, "member-a", &period);
+    let (message, _) = w
+        .vtc
+        .pcreds()
+        .request_credential(&hvk, &user, Vec::new(), &ssid, &mut w.rng)
+        .unwrap();
+    assert!(
+        w.vtc
+            .issue_vetter_root("member-b", &period, &message, &mut w.rng)
+            .is_err()
+    );
+    // A is not locked out, and B can still enrol for itself.
+    VetterEngine::new("member-a")
+        .enroll(&mut w.vtc, &mut w.rng)
+        .unwrap();
+    VetterEngine::new("member-b")
+        .enroll(&mut w.vtc, &mut w.rng)
+        .unwrap();
+}
+
+#[test]
+fn rotate_refuses_a_live_period_name() {
+    let mut w = world(21, 0);
+    assert_eq!(
+        w.vtc.rotate("2026-09", &mut w.rng).err(),
+        Some(ProtoError::PeriodExists("2026-09".into()))
+    );
+    w.vtc.rotate("2026-10", &mut w.rng).unwrap();
+    assert_eq!(
+        w.vtc.rotate("2026-09", &mut w.rng).err(),
+        Some(ProtoError::PeriodExists("2026-09".into()))
+    );
+    assert_eq!(w.vtc.live_periods(), vec!["2026-10", "2026-09"]);
+}
+
+#[test]
+fn a_request_over_the_attestation_limit_is_refused_before_verification() {
+    use pcs_vetting_prototype::vtc::MAX_ATTESTATIONS;
+    let mut w = world(22, 1);
+    let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    let a = vet(&mut w, 0, &bob, VettingMethod::InPerson);
+    bob.receive(&w.vtc, a.clone()).unwrap();
+    let many: Vec<&HiddenAttestation> = std::iter::repeat_n(&a, MAX_ATTESTATIONS + 1).collect();
+    let c = w.vtc.challenge(&mut w.rng);
+    let sub = bob
+        .submit_attestations(&w.vtc, &c, &many, &mut w.rng)
+        .unwrap();
+    assert_eq!(
+        w.vtc.submit(&sub, now()).err(),
+        Some(ProtoError::TooManyAttestations {
+            count: MAX_ATTESTATIONS + 1,
+            max: MAX_ATTESTATIONS,
+        })
+    );
+}
+
+#[test]
+fn an_ineligible_statement_does_not_burn_its_token() {
+    let mut w = world(23, 2);
+    let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    // An expired statement: verified, but not eligible.
+    let mut m = meta(&bob, &w.vtc, VettingMethod::InPerson);
+    m.valid_until = NaiveDate::from_ymd_opt(2026, 9, 21).unwrap();
+    let request = bob.vetting_request(&w.vtc, "member-0", &mut w.rng).unwrap();
+    let r = w.vetters[0].accept(None, 2).unwrap();
+    let expired = w.vetters[0]
+        .attest(&w.vtc, &r, &request, m, &mut w.rng)
+        .unwrap();
+    let token = expired.token.clone();
+    bob.receive(&w.vtc, expired).unwrap();
+    let d = submit(&mut w, &bob).unwrap();
+    assert!(d.statements[0].failures.contains(&"expired".to_string()));
+    assert!(!d.statements[0].eligible);
+
+    // The corrected statement on the same token counts, and the VTC logs no anomaly.
+    let mut carol = ApplicantEngine::new(&w.vtc, "did:example:carol", &mut w.rng).unwrap();
+    let m = meta(&carol, &w.vtc, VettingMethod::InPerson);
+    let request = carol
+        .vetting_request(&w.vtc, "member-0", &mut w.rng)
+        .unwrap();
+    let corrected = w.vetters[0]
+        .attest_with_token(&w.vtc, token, &request, m, &mut w.rng)
+        .unwrap();
+    carol.receive(&w.vtc, corrected).unwrap();
+    let d = submit(&mut w, &carol).unwrap();
+    assert!(d.statements[0].eligible, "{:?}", d.statements[0].failures);
+    assert!(w.vtc.tokens.anomalies.is_empty());
+}
+
+#[test]
+fn a_failed_replacement_keeps_the_old_attestation() {
+    let mut w = world(24, 1);
+    let mut bob = ApplicantEngine::new(&w.vtc, "did:example:bob", &mut w.rng).unwrap();
+    let first = vet(&mut w, 0, &bob, VettingMethod::Video);
+    bob.receive(&w.vtc, first).unwrap();
+    // A refresh whose metadata no longer matches what was attested fails verification.
+    let mut bad = vet(&mut w, 0, &bob, VettingMethod::InPerson);
+    bad.meta.method = VettingMethod::Video;
+    assert!(matches!(
+        bob.replace(&w.vtc, bad),
+        Err(ProtoError::AttestationRejected(_))
+    ));
+    assert_eq!(bob.held(), 1);
 }

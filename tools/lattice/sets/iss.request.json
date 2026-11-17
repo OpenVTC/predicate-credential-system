@@ -1,0 +1,68 @@
+{
+  "schema": "jali-params-request/2",
+  "id": "pcreds128-g15-k16-mdef-d128-lr3-iss-beta439",
+  "mode": "native",
+  "degree": 128,
+  "modulus": {
+    "search": {
+      "factors": 1
+    }
+  },
+  "hardness": {
+    "policy": "beta",
+    "beta_min": 439
+  },
+  "statement": {
+    "source": "requirements",
+    "requirements": {
+      "alpha_squared": 9216,
+      "approx_alpha_squared": 4343375016,
+      "l": 2,
+      "l2_bounds_squared": [],
+      "l2_rows": [],
+      "lifted_moduli": [
+        {
+          "max_integer_coefficient": 503808007,
+          "modulus": 983040
+        },
+        {
+          "max_integer_coefficient": 2147999742,
+          "modulus": 1048573
+        }
+      ],
+      "linf_bound": 2049,
+      "m1": 72,
+      "max_integer_coefficient": 2147999742,
+      "n_bin": 72,
+      "n_prime": 10
+    },
+    "statement_modulus": 1048573,
+    "blocks": [
+      {
+        "name": "usk",
+        "norm": {
+          "linf_exact": 1
+        },
+        "placement": "ajtai",
+        "rows": 16
+      },
+      {
+        "name": "x0",
+        "norm": {
+          "linf_exact": 1
+        },
+        "placement": "ajtai",
+        "rows": 48
+      },
+      {
+        "name": "e",
+        "norm": {
+          "linf_exact": 7
+        },
+        "placement": "ajtai",
+        "rows": 8
+      }
+    ]
+  },
+  "note": "R_iss (pi_iss) of the lattice backend of predicate-credential-system (tag set R: gamma 15, p 2^16, q_t 983040, m 168; x_0 ternary, ell_r 3), exported at worst-case public data"
+}

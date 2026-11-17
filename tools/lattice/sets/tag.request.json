@@ -1,0 +1,56 @@
+{
+  "schema": "jali-params-request/2",
+  "id": "pcreds128-g15-k16-mdef-d128-tag-beta443",
+  "mode": "native",
+  "degree": 128,
+  "modulus": {
+    "search": {
+      "factors": 1
+    }
+  },
+  "hardness": {
+    "policy": "beta",
+    "beta_min": 443
+  },
+  "statement": {
+    "source": "requirements",
+    "requirements": {
+      "alpha_squared": 3072,
+      "approx_alpha_squared": 44212392,
+      "l": 2,
+      "l2_bounds_squared": [],
+      "l2_rows": [],
+      "lifted_moduli": [
+        {
+          "max_integer_coefficient": 503808007,
+          "modulus": 983040
+        }
+      ],
+      "linf_bound": 513,
+      "m1": 24,
+      "max_integer_coefficient": 503808007,
+      "n_bin": 24,
+      "n_prime": 2
+    },
+    "statement_modulus": 1048573,
+    "blocks": [
+      {
+        "name": "usk",
+        "norm": {
+          "linf_exact": 1
+        },
+        "placement": "ajtai",
+        "rows": 16
+      },
+      {
+        "name": "e",
+        "norm": {
+          "linf_exact": 7
+        },
+        "placement": "ajtai",
+        "rows": 8
+      }
+    ]
+  },
+  "note": "R_Tag (pi_id) of the lattice backend of predicate-credential-system (tag set R: gamma 15, p 2^16, q_t 983040, m 168; beta_r 1), exported at worst-case public data"
+}

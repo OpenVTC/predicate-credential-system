@@ -1,7 +1,9 @@
 //! Hash-to-group oracles for BLS12-381 (`H_2 = htag`, §2.1 and §3.1.1).
 //!
-//! This is the only module of the library that names a concrete curve: arkworks 0.6.0 ships
-//! hash-to-curve configurations for BLS12-381 (and BLS12-377) only.
+//! The hash-to-curve oracles of the library name a concrete curve here: arkworks 0.6.0 ships
+//! hash-to-curve configurations for BLS12-381 (and BLS12-377) only. (The other modules that name
+//! BLS12-381 are [`crate::sigma::ciphersuite`], for the identifiers in the Fiat-Shamir tag, and
+//! [`crate::pcreds::pairing::ietf`].)
 //!
 //! Implementation notes:
 //!

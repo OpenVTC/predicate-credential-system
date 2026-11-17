@@ -1,0 +1,565 @@
+{
+  "schema": "jali-params-report/1",
+  "id": "pcreds128-g15-k16-mdef-d128-lr3-iss-beta439",
+  "request_sha256": "3c5f26c4f889c855a8a5e0be4ad839d97462998adee626dd838a07165389c841",
+  "params_sha256": "99497d955ae1b9252b3febe7e331a8def52e18f061a4a10745b7f6d4efa21db3",
+  "tool": {
+    "name": "jali-params",
+    "version": "3",
+    "sha256": "840cc4c4c287f5db5e65be296f104faa3aa7077d166b672b622ccf9a4ce29cb7"
+  },
+  "environment": {
+    "python": "3.14.3",
+    "mpmath": "1.4.1",
+    "sympy": "1.14.0"
+  },
+  "deterministic": true,
+  "policy": {
+    "name": "beta",
+    "beta_min": 439,
+    "mlwe": "uSVP beta >= 439",
+    "msis": "beta >= 439 and delta < 1.0044"
+  },
+  "statement": {
+    "source": "requirements",
+    "requirements": {
+      "m1": 72,
+      "l": 2,
+      "alpha_squared": 9216,
+      "n_bin": 72,
+      "n_prime": 10,
+      "linf_bound": 2049,
+      "l2_rows": [],
+      "l2_bounds_squared": [],
+      "max_integer_coefficient": 2147999742,
+      "approx_alpha_squared": 4343375016
+    },
+    "statement_modulus": 1048573,
+    "note": null,
+    "lifted_moduli": [
+      {
+        "modulus": 983040,
+        "max_integer_coefficient": 503808007
+      },
+      {
+        "modulus": 1048573,
+        "max_integer_coefficient": 2147999742
+      }
+    ]
+  },
+  "summary": {
+    "q": 381754410435781,
+    "log2_q": 48.4396,
+    "mlwe_rank": 19,
+    "mlwe_beta": 471,
+    "n_msis": 8,
+    "msis_beta": 440,
+    "gamma": 131070,
+    "d_bits": 9,
+    "log_sigma": [
+      16,
+      11,
+      12,
+      22
+    ],
+    "estimated_proof_bytes": 46208
+  },
+  "modulus": {
+    "q": 381754410435781,
+    "log2_q": 48.4396,
+    "bits": 49,
+    "q_mod_8": 5,
+    "gamma": 131070,
+    "gamma_0": 262144,
+    "gamma_v2": 1,
+    "d_bits": 9,
+    "primality": "deterministic (sympy.isprime, n < 2^64)",
+    "rns_primes_required": 2,
+    "rust_capacity": {
+      "prime_bits": 256,
+      "q_bits": 256,
+      "log_sigma": 100,
+      "coefficient_bits": 256
+    },
+    "construction": "gamma first: q = 1 + gamma*t with t odd (v2(gamma) = 2) or t = 2 mod 4 (v2(gamma) = 1), the smallest prime at or above the start",
+    "lower_bounds": [
+      {
+        "name": "ARP modulus bound",
+        "q_at_least": 24690229189,
+        "log2": 34.5232
+      },
+      {
+        "name": "binary lifting bound",
+        "q_at_least": 4275975241,
+        "log2": 31.9936
+      },
+      {
+        "name": "slack lifting bound",
+        "q_at_least": 4270441588,
+        "log2": 31.9917
+      },
+      {
+        "name": "modulus lifting bound",
+        "q_at_least": 381754409360845,
+        "log2": 48.4396
+      }
+    ],
+    "largest_lower_bound": "modulus lifting bound",
+    "binding_at_q": "modulus lifting bound",
+    "window_bits": 4,
+    "default_width_window_from": {
+      "q_at_least": 381754409360845,
+      "log2": 48.4396,
+      "note": "with a per-slot width, the search also starts where the default width's lower bound would start it"
+    },
+    "search": [
+      {
+        "bits": 49,
+        "start": 381754409360845,
+        "q": 381754410435781,
+        "estimated_proof_bytes": 46208,
+        "steps": [
+          {
+            "start": 381754409360845,
+            "gamma": 524286,
+            "gamma0_at_start": 262144,
+            "q": 532824690616093,
+            "candidates_tested": 9,
+            "event": "accepted",
+            "estimated_proof_bytes": 47360
+          },
+          {
+            "start": 381754409360845,
+            "gamma": 262142,
+            "gamma0_at_start": 262144,
+            "q": 381754415094029,
+            "candidates_tested": 6,
+            "event": "accepted",
+            "estimated_proof_bytes": 46464
+          },
+          {
+            "start": 381754409360845,
+            "gamma": 131070,
+            "gamma0_at_start": 262144,
+            "q": 381754410435781,
+            "candidates_tested": 3,
+            "event": "accepted",
+            "estimated_proof_bytes": 46208
+          },
+          {
+            "start": 381754409360845,
+            "gamma": 65534,
+            "gamma0_at_start": 262144,
+            "q": 381754409505589,
+            "candidates_tested": 1,
+            "event": "accepted",
+            "estimated_proof_bytes": 46336
+          }
+        ]
+      },
+      {
+        "bits": 50,
+        "start": 562949953421312,
+        "q": 562949969641349,
+        "estimated_proof_bytes": 46400,
+        "steps": [
+          {
+            "start": 562949953421312,
+            "gamma": 1048574,
+            "gamma0_at_start": 524288,
+            "q": 1300860461901773,
+            "candidates_tested": 5,
+            "event": "accepted",
+            "estimated_proof_bytes": 48000
+          },
+          {
+            "start": 562949953421312,
+            "gamma": 524286,
+            "gamma0_at_start": 524288,
+            "q": 562949994307429,
+            "candidates_tested": 20,
+            "event": "accepted",
+            "estimated_proof_bytes": 46528
+          },
+          {
+            "start": 562949953421312,
+            "gamma": 262142,
+            "gamma0_at_start": 524288,
+            "q": 562949969641349,
+            "candidates_tested": 16,
+            "event": "accepted",
+            "estimated_proof_bytes": 46400
+          },
+          {
+            "start": 562949953421312,
+            "gamma": 131070,
+            "gamma0_at_start": 524288,
+            "q": 562949954600941,
+            "candidates_tested": 3,
+            "event": "accepted",
+            "estimated_proof_bytes": 46528
+          }
+        ]
+      },
+      {
+        "bits": 51,
+        "start": 1125899906842624,
+        "q": 1125899909971957,
+        "estimated_proof_bytes": 46592,
+        "steps": [
+          {
+            "start": 1125899906842624,
+            "gamma": 1048574,
+            "gamma0_at_start": 524288,
+            "q": 1300860461901773,
+            "candidates_tested": 5,
+            "event": "accepted",
+            "estimated_proof_bytes": 48000
+          },
+          {
+            "start": 1125899906842624,
+            "gamma": 524286,
+            "gamma0_at_start": 524288,
+            "q": 1125899909971957,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 46592
+          },
+          {
+            "start": 1125899906842624,
+            "gamma": 262142,
+            "gamma0_at_start": 524288,
+            "q": 1125899919884189,
+            "candidates_tested": 13,
+            "event": "accepted",
+            "estimated_proof_bytes": 46720
+          },
+          {
+            "start": 1125899906842624,
+            "gamma": 131070,
+            "gamma0_at_start": 524288,
+            "q": 1125899909464021,
+            "candidates_tested": 5,
+            "event": "accepted",
+            "estimated_proof_bytes": 46848
+          }
+        ]
+      },
+      {
+        "bits": 52,
+        "start": 2251799813685248,
+        "q": 2251799891271533,
+        "estimated_proof_bytes": 46784,
+        "steps": [
+          {
+            "start": 2251799813685248,
+            "gamma": 2097150,
+            "gamma0_at_start": 1048576,
+            "q": 6168546570387301,
+            "candidates_tested": 10,
+            "event": "accepted",
+            "estimated_proof_bytes": 48880
+          },
+          {
+            "start": 2251799813685248,
+            "gamma": 1048574,
+            "gamma0_at_start": 1048576,
+            "q": 2251799891271533,
+            "candidates_tested": 19,
+            "event": "accepted",
+            "estimated_proof_bytes": 46784
+          },
+          {
+            "start": 2251799813685248,
+            "gamma": 524286,
+            "gamma0_at_start": 1048576,
+            "q": 2251799829381061,
+            "candidates_tested": 8,
+            "event": "accepted",
+            "estimated_proof_bytes": 46912
+          },
+          {
+            "start": 2251799813685248,
+            "gamma": 262142,
+            "gamma0_at_start": 1048576,
+            "q": 2251799815127029,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 47040
+          }
+        ]
+      },
+      {
+        "bits": 53,
+        "start": 4503599627370496,
+        "q": 4503599633645557,
+        "estimated_proof_bytes": 47344,
+        "steps": [
+          {
+            "start": 4503599627370496,
+            "gamma": 2097150,
+            "gamma0_at_start": 1048576,
+            "q": 6168546570387301,
+            "candidates_tested": 10,
+            "event": "accepted",
+            "estimated_proof_bytes": 48880
+          },
+          {
+            "start": 4503599627370496,
+            "gamma": 1048574,
+            "gamma0_at_start": 1048576,
+            "q": 4503599633645557,
+            "candidates_tested": 2,
+            "event": "accepted",
+            "estimated_proof_bytes": 47344
+          },
+          {
+            "start": 4503599627370496,
+            "gamma": 524286,
+            "gamma0_at_start": 1048576,
+            "q": 4503599636742109,
+            "candidates_tested": 5,
+            "event": "accepted",
+            "estimated_proof_bytes": 47472
+          },
+          {
+            "start": 4503599627370496,
+            "gamma": 262142,
+            "gamma0_at_start": 1048576,
+            "q": 4503599653846837,
+            "candidates_tested": 26,
+            "event": "accepted",
+            "estimated_proof_bytes": 47600
+          }
+        ]
+      }
+    ]
+  },
+  "hardness": {
+    "mlwe": {
+      "model": "primal uSVP, the 2016 estimate (ADPS16) with Kannan's embedding, secret and error uniform in {-1,0,1}, any number of samples",
+      "rank": 19,
+      "n": 2432,
+      "q": 381754410435781,
+      "samples_m_for_cross_checks": 2304,
+      "beta": 471,
+      "delta": 1.0035514821433373,
+      "core_svp_bits": {
+        "classical": 137.5,
+        "quantum": 124.8
+      }
+    },
+    "msis": {
+      "model": "closed form delta = 2^((log2 B)^2 / (4 n d log2 q)) (LNP22 Section 6.1, after MR09 and GN08); beta = smallest block size with delta_0(beta) <= delta",
+      "rank": 8,
+      "n": 1024,
+      "m": 13952,
+      "q": 381754410435781,
+      "log2_bound": 32.630862,
+      "delta": "1.00372674538",
+      "beta": 440,
+      "core_svp_bits": {
+        "classical": 128.5,
+        "quantum": 116.6
+      }
+    },
+    "assumptions": "Hiding needs Extended-MLWE, taken as MLWE following LNP22 Section 6.1; binding needs MSIS. Core-SVP 2^(0.292 beta) classical, 2^(0.265 beta) quantum (ADPS16). All security figures are cost-model heuristics, not proofs."
+  },
+  "derived": {
+    "lambda": 4,
+    "n_ex": 72,
+    "l_ext": 8,
+    "b_squared": 8348597352175,
+    "z1_bound_squared": 190193521372692,
+    "z3_bound_squared": 27753065054,
+    "z4_bound": 104018739,
+    "exact_alpha_squared": 9216,
+    "approx_alpha_squared": 5373953280,
+    "approx_extraction_bound": 208037478,
+    "rejection_M1": 3,
+    "rejection_M2": 3,
+    "range_rejection_M3": 2,
+    "range_rejection_M4": 2,
+    "estimated_proof_bytes": 46208,
+    "rns_primes_required": 2
+  },
+  "checks": [
+    {
+      "name": "completeness (m1+Z)d",
+      "value": "9216.0",
+      "relation": ">=",
+      "limit": "640.0",
+      "margin_bits": 3.848
+    },
+    {
+      "name": "completeness m2 d",
+      "value": "4736.0",
+      "relation": ">=",
+      "limit": "640.0",
+      "margin_bits": 2.88753
+    },
+    {
+      "name": "response bound b^2",
+      "value": "8.348597352e+12",
+      "relation": "<",
+      "limit": "3.402823669e+38",
+      "margin_bits": 85.0753
+    },
+    {
+      "name": "MSIS delta",
+      "value": "1.003726745",
+      "relation": "<",
+      "limit": "1.0044",
+      "margin_bits": 0.00096737
+    },
+    {
+      "name": "MSIS bound < q",
+      "value": "6650714802.0",
+      "relation": "<",
+      "limit": "3.817544104e+14",
+      "margin_bits": 15.8088
+    },
+    {
+      "name": "rounding 2^(D-1) omega d < gamma",
+      "value": "65536.0",
+      "relation": "<",
+      "limit": "131070.0",
+      "margin_bits": 0.999978
+    },
+    {
+      "name": "MLWE delta (Rust accepts <= 1.0044)",
+      "value": "1.003551482",
+      "relation": "<=",
+      "limit": "1.0044",
+      "margin_bits": 0.0012193
+    },
+    {
+      "name": "ARP modulus bound",
+      "value": "3.817544104e+14",
+      "relation": ">=",
+      "limit": "2.469022919e+10",
+      "margin_bits": 13.9164
+    },
+    {
+      "name": "binary lifting bound",
+      "value": "3.817544104e+14",
+      "relation": ">",
+      "limit": "4275975240.0",
+      "margin_bits": 16.446
+    },
+    {
+      "name": "slack lifting bound",
+      "value": "3.817544104e+14",
+      "relation": ">",
+      "limit": "4270441587.0",
+      "margin_bits": 16.4479
+    },
+    {
+      "name": "modulus lifting bound (compile), modulus 983040",
+      "value": "3.817544104e+14",
+      "relation": ">",
+      "limit": "3.578927628e+14",
+      "margin_bits": 0.0931175
+    },
+    {
+      "name": "modulus lifting bound (compile), modulus 1048573",
+      "value": "3.817544104e+14",
+      "relation": ">",
+      "limit": "3.817544094e+14",
+      "margin_bits": 4.06231e-09
+    },
+    {
+      "name": "rejection_M1 < 2^16",
+      "value": "3.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 14.415
+    },
+    {
+      "name": "rejection_M2 < 2^16",
+      "value": "3.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 14.415
+    },
+    {
+      "name": "range_rejection_M3 < 2^16",
+      "value": "2.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 15.0
+    },
+    {
+      "name": "range_rejection_M4 < 2^16",
+      "value": "2.0",
+      "relation": "<",
+      "limit": "65536.0",
+      "margin_bits": 15.0
+    }
+  ],
+  "repetitions": {
+    "M1": 3,
+    "M2": 3,
+    "M3": 2,
+    "M4": 2,
+    "note": "integer ceilings the Rust prover uses; expected attempts are at most their product"
+  },
+  "range_width": {
+    "rule": "per-slot (Requirements::approx_alpha_squared)",
+    "approx_alpha_squared": 4343375016,
+    "default_alpha_squared": 5373953280,
+    "log_sigma3_default": 22,
+    "log_sigma3_per_slot": 22,
+    "log_sigma3_guard": 20,
+    "log_sigma3": 22,
+    "binding": "per-slot",
+    "note": "log_sigma[3] is the larger of the width for the per-slot bound and the guard, the smallest width whose rejection constant M4 for n' d linf_bound^2 is 2; the prover's M4 keeps that bound, so rejection sampling stays exact, and a narrower sigma_4 only lowers the extraction bound E = 2 z4_bound"
+  },
+  "policy_comparison": {
+    "policy": {
+      "name": "delta",
+      "mlwe": "uSVP delta_0 <= 1.0044",
+      "msis": "delta < 1.0044"
+    },
+    "q": 381754414391869,
+    "log2_q": 48.4396,
+    "mlwe_rank": 16,
+    "mlwe_beta": 372,
+    "n_msis": 7,
+    "msis_beta": 354,
+    "gamma": 524286,
+    "d_bits": 11,
+    "log_sigma": [
+      16,
+      11,
+      12,
+      22
+    ],
+    "estimated_proof_bytes": 44588
+  },
+  "estimator_check": {
+    "target_bits": 128.0,
+    "mode": "rough (core-SVP, ADPS16)",
+    "cheapest": {
+      "mlwe": {
+        "attack": "dual_hybrid",
+        "rop_log2": 135.78,
+        "beta": 465,
+        "reached": true
+      },
+      "msis": {
+        "attack": "lattice",
+        "rop_log2": 128.48,
+        "beta": 440,
+        "reached": true
+      }
+    },
+    "reached": true,
+    "lattice_estimator": {
+      "commit": "53da5982597709ba0fdf94ea37a84d822310fd84",
+      "pinned": true,
+      "dirty": false
+    },
+    "sage": "SageMath version 10.9, Release Date: 2026-05-04"
+  }
+}

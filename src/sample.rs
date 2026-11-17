@@ -2,10 +2,32 @@
 //!
 //! The paper samples several values from `Z_p^* = Z_p \ {0}` (the `Tag_DDH` key, the `Σ-PS`
 //! re-randomizer `r` and blinding exponent `u`, ...). arkworks has no such sampler, so it is
-//! written once here.
+//! written once here. The masks of the sigma protocols are drawn by [`random_scalar`], the
+//! sampler that `draft-irtf-cfrg-sigma-protocols-04` recommends (§2.2).
 
-use ark_ff::Field;
+use ark_ff::{Field, PrimeField};
 use ark_std::rand::{CryptoRng, RngCore};
+use zeroize::Zeroizing;
+
+use crate::hash::duplex_sponge::ns;
+
+/// `Group.random_scalar(rng)` of `draft-irtf-cfrg-sigma-protocols-04` (§2.2): `N_s + 16` bytes
+/// from `rng`, read as a little-endian integer and reduced modulo `p`, which is `DecodeField` of
+/// `draft-irtf-cfrg-fiat-shamir-04` (Appendix A.1.2), the reduction the Sigma draft recommends.
+/// For uniform bytes the output is within statistical distance `2^-128` of uniform on `Z_p`.
+///
+/// The masks of [`crate::sigma::protocol::commit`] come from here, so that a prover fed with the
+/// seeded generator of the draft's test vectors (Appendix A.1) draws the draft's nonces. The
+/// buffer is wiped after use.
+pub(crate) fn random_scalar<F, R>(rng: &mut R) -> F
+where
+    F: PrimeField,
+    R: RngCore + CryptoRng + ?Sized,
+{
+    let mut buf = Zeroizing::new(vec![0u8; ns::<F>() + 16]);
+    rng.fill_bytes(&mut buf);
+    F::from_le_bytes_mod_order(&buf)
+}
 
 /// `x ← Z_p^*`: a uniform non-zero field element.
 ///

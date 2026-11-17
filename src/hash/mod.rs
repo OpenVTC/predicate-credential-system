@@ -1,8 +1,16 @@
-//! Random oracles and the hashing transcript (paper §2.1, "Notation and algebraic setting").
+//! Random oracles and the hashing transcript (paper §2, "Notation").
 //!
-//! The paper uses random oracles `H_0, H_1 : {0,1}* → Z_p` and a hash-to-group oracle
-//! `H_2 = htag : Z_p → G_1 \ {1}`: `H_0` derives public tag points and instantiates the predicate
-//! encoding, `H_1` supplies Fiat-Shamir challenges, `htag` is the base of `Tag_DDH`.
+//! The protocol uses domain-separated random oracles `H_id`, `H_req` and `H_1` (§4.2, `Setup`),
+//! and the instantiations hash to the group: `H_id` maps `⟨hvk⟩` to the identifier point `x_0`
+//! of a helper key ([`crate::pcreds::Protocol::identifier_point`]), `H_req` maps
+//! `⟨pp, hvk, id_Q, j_Q⟩` to the recipient point `x_Q`
+//! ([`crate::pcreds::Protocol::recipient_point`]), `H_1` supplies Fiat-Shamir challenges, and
+//! `H_2 = htag : Z_p → G_1 \ {1}` is the base of `Tag_DDH`. `H_id` and `H_req` are
+//! [`Transcript`]s of the protocol under their own oracle suffixes (`/PCREDS-HID`,
+//! `/PCREDS-HREQ`); the generators of `Σ-BBS` and of `Tag_DY` are hashed from the deployment
+//! label ([`HashToGroup`]). `H_1` is the SHAKE128 duplex sponge of the IETF CFRG draft
+//! `draft-irtf-cfrg-fiat-shamir-04` ([`duplex_sponge`]), which `DeriveChallenge` of
+//! `draft-irtf-cfrg-sigma-protocols-04` drives ([`crate::sigma::fiat_shamir`]).
 //!
 //! Everything below the oracle *names* is an implementation choice of this crate, not something
 //! the paper specifies:
@@ -11,24 +19,24 @@
 //!   `len(label) ‖ label ‖ len(data) ‖ data` with 8-byte little-endian lengths. The encoding of
 //!   a sequence is uniquely decodable, hence injective: `("ab", "c")` and `("a", "bc")` hash
 //!   differently.
-//! * **Domain separation.** Every oracle has the domain-separation tag
-//!   [`DOMAIN_PREFIX`]` ‖ suffix` (`PCS-V1/H0`, `PCS-V1/H1`, `PCS-V1/H2`,
-//!   `PCS-V1/BBS-GENERATORS`, ...), which is never empty. For `H_0`, `H_2` and the generator
-//!   derivations, the *deployment label* stored in the public parameters is bound as a framed
-//!   item of the oracle input (not by concatenating it to the tag), so that no
-//!   `(suffix, label)` pair can collide with another one.
-//! * **`H_1` is deployment-bound only through `ctx`.** [`h1_transcript`] absorbs the tag
-//!   `PCS-V1/H1` and the caller's context, nothing else: the paper's `c = H_1(ctx, A)` has no
-//!   further input, and its `ctx_j`, `ctx_0` begin with `pp`. Binding a proof to a deployment is
-//!   therefore the job of whoever builds `ctx`, which must contain (a digest of) the public
-//!   parameters. The stand-alone proofs of this crate do so
-//!   ([`crate::kiprf::prove_tag`] absorbs `pp_Tag`, [`crate::cred::possess`] absorbs
-//!   `pp_Σ` and `vk`); a statement whose bases are the same in every deployment (`id = g_1^usk`)
-//!   would otherwise replay across deployments.
-//! * **`H_0` is typed.** Its three uses `c_0 = H_0("identity")`, `EncPred(f) =
-//!   H_0("predicate" ‖ ⟨f⟩)` and `s = H_0(id)` are separate functions whose inputs carry a type
-//!   item, so the three uses cannot collide.
-//! * **Hash to field.** Scalars are derived with arkworks' `DefaultFieldHasher<Sha256, 128>`:
+//! * **Domain separation.** Every transcript oracle has the domain-separation tag
+//!   [`DOMAIN_PREFIX`]` ‖ suffix` (`PCS-V1/H2`, `PCS-V1/PCREDS-HID`, `PCS-V1/PCREDS-HREQ`,
+//!   `PCS-V1/PCREDS-BBS-GENERATORS`, `PCS-V1/DY-GENERATOR`, ...), which is never empty. For
+//!   `H_2` and the generator derivations, the *deployment label* stored in the public
+//!   parameters is bound as a framed item of the oracle input (not by concatenating it to the
+//!   tag), so that no `(suffix, label)` pair can collide with another one. `H_id` and `H_req`
+//!   absorb the digest of `pp`, which covers the label.
+//! * **`H_1` is deployment-bound only through `ctx`.** The session identifier of a Fiat-Shamir
+//!   proof is derived from a tag that names this crate, the version of the tag format, the draft
+//!   revision, the flavor, the ciphersuite and the caller's context `ctx`, and from nothing else
+//!   ([`crate::sigma::fiat_shamir::tag`]). The paper's `c = H_1(ctx, A)` has no further input,
+//!   and its `ctx_j`, `ctx_0` begin with `pp`. Binding a proof to a deployment is therefore the
+//!   job of whoever builds `ctx`, which must contain (a digest of) the public parameters. The
+//!   protocol does so (every context of [`crate::pcreds`] starts with the digest of `pp`), and so
+//!   does the stand-alone tag proof ([`crate::kiprf::prove_tag`] absorbs `pp_Tag`). A statement
+//!   whose bases are the same in every deployment would otherwise replay across deployments.
+//! * **Hash to field.** The transcript oracles derive scalars with arkworks'
+//!   `DefaultFieldHasher<Sha256, 128>`:
 //!   `expand_message_xmd` to `L = ⌈(⌈log p⌉ + 128)/8⌉` bytes, read as an integer and reduced mod
 //!   `p`. If the `L` bytes are uniform the result is within statistical distance
 //!   `p / 2^(8L+2) < 2^-128` of uniform (a uniform integer below `N` reduced mod `p` is at
@@ -38,6 +46,7 @@
 //!   hashers. It is used here only as a random oracle into `Z_p`.
 
 pub mod bls12_381;
+pub mod duplex_sponge;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;
 
@@ -53,12 +62,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{error::Error, serialization};
 
-/// Crate-wide prefix of every domain-separation tag.
+/// Crate-wide prefix of every domain-separation tag of a transcript oracle.
 pub const DOMAIN_PREFIX: &[u8] = b"PCS-V1";
-/// Oracle suffix of `H_0` (tag points and predicate encoding).
-pub const H0_SUFFIX: &[u8] = b"/H0";
-/// Oracle suffix of `H_1` (Fiat-Shamir challenges).
-pub const H1_SUFFIX: &[u8] = b"/H1";
 /// Oracle suffix of `H_2 = htag` (hash to group).
 pub const H2_SUFFIX: &[u8] = b"/H2";
 
@@ -80,8 +85,9 @@ fn frame(sink: &mut impl FnMut(&[u8]), label: &[u8], data: &[u8]) {
     sink(data);
 }
 
-/// SHA-256-backed absorber with injective framing; the common core of `H_0`, `H_1` and of the
-/// Fiat-Shamir contexts `ctx_j`, `ctx_0` of the construction box.
+/// SHA-256-backed absorber with injective framing, the common core of `H_id`, `H_req` and of
+/// the Fiat-Shamir contexts `ctx` of the protocol. (The Fiat-Shamir challenges themselves come
+/// from the duplex sponge of [`duplex_sponge`].)
 ///
 /// Cloning a transcript forks it: both copies continue from the same absorbed prefix.
 #[derive(Clone, Debug)]
@@ -148,60 +154,6 @@ impl Transcript {
 }
 
 // ---------------------------------------------------------------------------------------------
-// H_0 and H_1
-// ---------------------------------------------------------------------------------------------
-
-fn h0_transcript(domain: &[u8], input_type: &[u8]) -> Transcript {
-    let mut transcript = Transcript::new(H0_SUFFIX);
-    transcript.append_bytes(b"deployment", domain);
-    transcript.append_bytes(b"input-type", input_type);
-    transcript
-}
-
-/// `c_0 := H_0("identity")`, the fixed public point at which the identifier
-/// `id = Tag(usk, c_0)` is evaluated (construction box, `Setup` step 3).
-#[must_use]
-pub fn h0_identity_point<F: PrimeField>(domain: &[u8]) -> F {
-    h0_transcript(domain, b"identity").challenge_scalar()
-}
-
-/// `EncPred(f) := H_0("predicate" ‖ ⟨f⟩)` for the canonical serialization
-/// `encoded_predicate = ⟨f⟩` (§5.1, "Scheme description"). Public and not hiding.
-#[must_use]
-pub fn h0_predicate<F: PrimeField>(domain: &[u8], encoded_predicate: &[u8]) -> F {
-    let mut transcript = h0_transcript(domain, b"predicate");
-    transcript.append_bytes(b"predicate", encoded_predicate);
-    transcript.challenge_scalar()
-}
-
-/// `s := H_0(id)`, the tag point of the identifier `id` (construction box, `Attest` step 4,
-/// `Prove` step 4). `id` is absorbed in its compressed canonical encoding.
-///
-/// # Errors
-/// [`Error::Serialization`] if `id` cannot be serialized.
-pub fn h0_id<F: PrimeField, I: CanonicalSerialize + ?Sized>(
-    domain: &[u8],
-    id: &I,
-) -> Result<F, Error> {
-    let mut transcript = h0_transcript(domain, b"id");
-    transcript.append_serializable(b"id", id)?;
-    Ok(transcript.challenge_scalar())
-}
-
-/// The `H_1` transcript of a Fiat-Shamir challenge `c = H_1(ctx, statement, A)` with `ctx`
-/// already absorbed. Used only by [`crate::sigma::fiat_shamir`], which appends the statement and
-/// the commitment.
-///
-/// Unlike `H_0` and `H_2` this oracle takes no deployment label: `ctx` is its only
-/// deployment-specific input and has to carry the public parameters (module docs).
-#[must_use]
-pub fn h1_transcript(ctx: &[u8]) -> Transcript {
-    let mut transcript = Transcript::new(H1_SUFFIX);
-    transcript.append_bytes(b"ctx", ctx);
-    transcript
-}
-
-// ---------------------------------------------------------------------------------------------
 // H_2: hash to group
 // ---------------------------------------------------------------------------------------------
 
@@ -234,7 +186,7 @@ pub fn oracle_input(domain: &[u8], counter: u64, msg: &[u8]) -> Vec<u8> {
 /// independent. Generic code takes `H: HashToGroup<E::G1>` as a type parameter because
 /// arkworks ships hash-to-curve suites only for BLS12-381 and BLS12-377.
 pub trait HashToGroup<G: PrimeGroup>:
-    Clone + Debug + PartialEq + Eq + CanonicalSerialize + CanonicalDeserialize
+    Clone + Debug + PartialEq + Eq + CanonicalSerialize + CanonicalDeserialize + Send + Sync
 {
     /// The oracle family of the deployment `domain`.
     ///
@@ -317,10 +269,14 @@ mod tests {
         assert_eq!(out, expected);
     }
 
+    /// The oracle suffix of the known answers below. It named the SHA-256 `H_1` of earlier
+    /// versions. The transcript framing it pins is the one of `H_id`, `H_req` and the contexts.
+    const KAT_SUFFIX: &[u8] = b"/H1";
+
     #[test]
     fn transcript_is_deterministic_and_forkable() {
         let build = || {
-            let mut t = Transcript::new(H1_SUFFIX);
+            let mut t = Transcript::new(KAT_SUFFIX);
             t.append_bytes(b"a", b"1");
             t.append_u64(b"n", 7);
             t.append_serializable(b"p", &G1Projective::generator())
@@ -355,63 +311,18 @@ mod tests {
     #[test]
     fn oracles_are_domain_separated() {
         // same items, different oracle
-        let mut t0 = Transcript::new(H0_SUFFIX);
-        let mut t1 = Transcript::new(H1_SUFFIX);
+        let mut t0 = Transcript::new(b"/PCREDS-HID");
+        let mut t1 = Transcript::new(b"/PCREDS-HREQ");
         t0.append_bytes(b"x", b"y");
         t1.append_bytes(b"x", b"y");
         assert_ne!(t0.digest(), t1.digest());
         assert_ne!(t0.challenge_scalar::<Fr>(), t1.challenge_scalar::<Fr>());
-
-        // H_1 on a context vs H_0 on anything we can form from the same bytes
-        let ctx = b"identity";
-        let h1: Fr = h1_transcript(ctx).challenge_scalar();
-        assert_ne!(h1, h0_identity_point::<Fr>(ctx));
-        assert_ne!(h1, h0_predicate::<Fr>(b"", ctx));
-        assert_ne!(h1, h0_id::<Fr, _>(b"", &ctx.to_vec()).unwrap());
-    }
-
-    #[test]
-    fn h0_uses_are_typed_and_deployment_bound() {
-        let d = b"deployment-a";
-        let c0: Fr = h0_identity_point(d);
-        // the three uses never collide, even on "matching" inputs
-        assert_ne!(c0, h0_predicate::<Fr>(d, b"identity"));
-        assert_ne!(c0, h0_predicate::<Fr>(d, b""));
-        assert_ne!(c0, h0_id::<Fr, _>(d, &b"identity".to_vec()).unwrap());
-        assert_ne!(
-            h0_predicate::<Fr>(d, b"abc"),
-            h0_id::<Fr, [u8]>(d, b"abc").unwrap()
-        );
-        // deployments are separated
-        assert_ne!(c0, h0_identity_point::<Fr>(b"deployment-b"));
-        assert_ne!(
-            h0_predicate::<Fr>(d, b"f"),
-            h0_predicate::<Fr>(b"deployment-b", b"f")
-        );
-        // (deployment, predicate) framing is injective
-        assert_ne!(
-            h0_predicate::<Fr>(b"ab", b"c"),
-            h0_predicate::<Fr>(b"a", b"bc")
-        );
-        // deterministic, input sensitive, non-zero on these inputs
-        assert_eq!(c0, h0_identity_point::<Fr>(d));
-        assert_ne!(h0_predicate::<Fr>(d, b"f1"), h0_predicate::<Fr>(d, b"f2"));
-        assert!(!c0.is_zero());
-    }
-
-    #[test]
-    fn h0_id_hashes_the_compressed_point() {
-        let d = b"dep";
-        let id = G1Projective::generator() * Fr::from(42u64);
-        let s: Fr = h0_id(d, &id).unwrap();
-        assert_eq!(s, h0_id::<Fr, _>(d, &id).unwrap());
-        assert_ne!(
-            s,
-            h0_id::<Fr, _>(d, &(id + G1Projective::generator())).unwrap()
-        );
-        // a different in-memory representation of the same point gives the same hash
-        let doubled_repr = (id + id) - id;
-        assert_eq!(s, h0_id::<Fr, _>(d, &doubled_repr).unwrap());
+        // the same bytes as one item under two oracles
+        let mut other = Transcript::new(KAT_SUFFIX);
+        other.append_bytes(b"ctx", b"identity");
+        let mut hid = Transcript::new(b"/PCREDS-HID");
+        hid.append_bytes(b"ctx", b"identity");
+        assert_ne!(hid.challenge_scalar::<Fr>(), other.challenge_scalar::<Fr>());
     }
 
     #[test]
@@ -440,7 +351,7 @@ mod tests {
     /// specification.
     #[test]
     fn known_answers() {
-        let mut t = Transcript::new(H1_SUFFIX);
+        let mut t = Transcript::new(KAT_SUFFIX);
         t.append_bytes(b"label", b"data");
         t.append_u64(b"n", 5);
         assert_eq!(
@@ -450,21 +361,6 @@ mod tests {
         assert_eq!(
             hex(&t.challenge_scalar::<Fr>().to_bytes().unwrap()),
             "667dd8b9896694540758017abb3e76ec1fa260468ce051d64d9182013dbf5a1c"
-        );
-        assert_eq!(
-            hex(&h0_identity_point::<Fr>(b"kat").to_bytes().unwrap()),
-            "ba4e10eb4b6498e0ae6d31de1a5e9de0eec2dbc4b8dab326b06fc7040f34ab0b"
-        );
-        assert_eq!(
-            hex(&h0_predicate::<Fr>(b"kat", b"threshold-3")
-                .to_bytes()
-                .unwrap()),
-            "e0d7d98bdaaa9eea091ddf0e2fcbf36d37893aea6471a7d54525b28509825f27"
-        );
-        let id = G1Projective::generator();
-        assert_eq!(
-            hex(&h0_id::<Fr, _>(b"kat", &id).unwrap().to_bytes().unwrap()),
-            "eae3736e0cf2d4c19d05913d343e2f81536e0a79f928489271dffb2cfff60022"
         );
     }
 }

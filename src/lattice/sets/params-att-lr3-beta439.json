@@ -1,0 +1,32 @@
+{
+  "id": "pcreds128-g15-k16-mdef-d128-lr3-att-beta439",
+  "prime_factors": [
+    "800602353498606932557"
+  ],
+  "degree": 128,
+  "m1": 89,
+  "l": 26,
+  "alpha_squared": 11392,
+  "n_bin": 89,
+  "l2_rows": [
+    16
+  ],
+  "l2_bounds_squared": [
+    90803788942
+  ],
+  "n_prime": 10,
+  "linf_bound": 4947423549,
+  "m2": 65,
+  "n_msis": 6,
+  "log_sigma": [
+    16,
+    12,
+    24,
+    43
+  ],
+  "gamma": 1048574,
+  "d_bits": 12,
+  "mlwe_rank": 26,
+  "mlwe_delta": 1.003684905705929,
+  "estimator": "jali-params 3; request sha256 7519bb3668401a75; policy beta>=439; MLWE uSVP (ADPS16) beta 447 delta 1.003684905705929; MSIS closed form beta 456 delta 1.003634304"
+}

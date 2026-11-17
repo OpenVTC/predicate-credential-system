@@ -10,6 +10,11 @@
 //! | HVZK simulator: `A = P^z T^{-c}` | [`simulate`] |
 //! | special-soundness extractor: `x = (z − z')/(c − c')` | [`extract`] |
 //!
+//! These are `ProverCommitment`, `ProverResponse`, `Verifier`, `SimulateResponse` and
+//! `SimulateCommitment` of `draft-irtf-cfrg-sigma-protocols-04` (§4). Masks and simulated
+//! responses are drawn with the draft's `Group.random_scalar` (§2.2): `N_s + 16` bytes of the
+//! generator reduced modulo `p`.
+//!
 //! The protocol is explicit (rather than hidden inside the Fiat-Shamir transform) so that the
 //! test harness can exercise completeness, the simulator and the extractor on exactly the
 //! relations the credential system proves. "Rewinding" a prover means running [`commit`] twice
@@ -18,12 +23,12 @@
 use core::fmt;
 use core::ops::Deref;
 
-use ark_ff::{Field, PrimeField, UniformRand};
+use ark_ff::{Field, PrimeField};
 use ark_std::rand::{CryptoRng, RngCore};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::relation::LinearRelation;
-use crate::error::Error;
+use crate::{error::Error, sample::random_scalar};
 
 /// The prover's secret state `st` between its two moves: the mask vector `r`.
 ///
@@ -153,11 +158,12 @@ impl<F: PrimeField> fmt::Debug for Witness<F> {
     }
 }
 
-/// First prover move `P_1`: samples a uniform mask `r_j` per witness coordinate and returns the
-/// commitment `A = φ(r)` with the secret state. A coordinate shared by several equations has
-/// ONE mask (§2.3, generalized Schnorr).
+/// First prover move `P_1` (`ProverCommitment`): samples a uniform mask `r_j` per witness
+/// coordinate and returns the commitment `A = φ(r)` with the secret state. A coordinate shared
+/// by several equations has ONE mask (§2.3, generalized Schnorr). The masks are drawn one after
+/// the other with `Group.random_scalar` (`N_s + 16` bytes each, reduced modulo `p`).
 ///
-/// The witness is not needed before [`respond`]; it is not checked against the relation here
+/// The witness is not needed before [`respond`]. It is not checked against the relation here
 /// (the Fiat-Shamir prover does that).
 ///
 /// # Errors
@@ -168,9 +174,7 @@ where
     Rng: RngCore + CryptoRng + ?Sized,
 {
     let state = ProverState {
-        masks: (0..rel.num_scalars())
-            .map(|_| R::Scalar::rand(rng))
-            .collect(),
+        masks: (0..rel.num_scalars()).map(|_| random_scalar(rng)).collect(),
     };
     let commitment = rel.evaluate(&state.masks)?;
     Ok((commitment, state))
@@ -202,15 +206,18 @@ pub fn respond<F: PrimeField>(
         .collect())
 }
 
-/// The decision predicate `V(x, a, c, z)`: accepts iff `φ(z) − c·Y = A`.
+/// The decision predicate `V(x, a, c, z)` (`Verifier` of the draft, §4.3): accepts iff the
+/// instance is valid (§3.5) and `φ(z) − c·Y = A`.
 ///
-/// Never panics; malformed transcripts (wrong number of responses, wrong commitment shape) are
+/// Never panics. Malformed transcripts (wrong number of responses, wrong commitment shape) are
 /// rejected. The witness-independent validity checks of a statement (`ValidTag`, the public
 /// part of `VerifyPossess`) are not part of the linear relation and must be run by the caller.
 #[must_use]
 pub fn verify<R: LinearRelation>(rel: &R, a: &R::Image, c: &R::Scalar, z: &[R::Scalar]) -> bool {
-    rel.recompute_commitment(c, z)
-        .is_ok_and(|recomputed| recomputed == *a)
+    rel.validate().is_ok()
+        && rel
+            .recompute_commitment(c, z)
+            .is_ok_and(|recomputed| recomputed == *a)
 }
 
 /// The special honest-verifier zero-knowledge simulator: for the given challenge `c` it samples
@@ -231,9 +238,7 @@ where
     R: LinearRelation,
     Rng: RngCore + CryptoRng + ?Sized,
 {
-    let z: Vec<R::Scalar> = (0..rel.num_scalars())
-        .map(|_| R::Scalar::rand(rng))
-        .collect();
+    let z: Vec<R::Scalar> = (0..rel.num_scalars()).map(|_| random_scalar(rng)).collect();
     let a = rel.recompute_commitment(c, &z)?;
     Ok((a, z))
 }

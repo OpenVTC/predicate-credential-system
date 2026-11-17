@@ -14,3 +14,9 @@ target
 
 # Auxiliary
 report.md
+
+# macOS Finder metadata
+.DS_Store
+
+# SageMath writes a preparsed copy next to every .sage script it runs (tools/lattice/)
+*.sage.py
