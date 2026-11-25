@@ -1,6 +1,6 @@
 [package]
 name = "predicate-credential-system"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # The minimum supported Rust version of OpenVTC, the crate's primary intended consumer.
 rust-version = "1.95.0"
