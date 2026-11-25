@@ -25,3 +25,4 @@ pr_labels = ["release"]
 [[package]]
 name = "pcs-vetting-prototype"
 semver_check = false
+publish = false
